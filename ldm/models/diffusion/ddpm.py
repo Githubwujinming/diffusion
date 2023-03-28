@@ -348,6 +348,7 @@ class DDPM(pl.LightningModule):
         loss, loss_dict = self(x)
         return loss, loss_dict
 
+    # 单步前向过程，返回loss
     def training_step(self, batch, batch_idx):
         loss, loss_dict = self.shared_step(batch)
 
@@ -433,16 +434,16 @@ class DDPM(pl.LightningModule):
 class LatentDiffusion(DDPM):
     """main class"""
     def __init__(self,
-                 first_stage_config,
-                 cond_stage_config,
-                 num_timesteps_cond=None,
-                 cond_stage_key="image",
-                 cond_stage_trainable=False,
+                 first_stage_config,# 输入的自编码器配置信息
+                 cond_stage_config,# 条件的配置信息
+                 num_timesteps_cond=None,# 最大步数
+                 cond_stage_key="image",# 条件的key
+                 cond_stage_trainable=False,# 条件的编码器是否可训练
                  concat_mode=True,
-                 cond_stage_forward=None,
+                 cond_stage_forward=None,# 条件编码器后接的前向网络
                  conditioning_key=None,
-                 scale_factor=1.0,
-                 scale_by_std=False,
+                 scale_factor=1.0,# 对输入编码特征的缩放因子
+                 scale_by_std=False,# 缩放因子是否使用标准差
                  *args, **kwargs):
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
         self.scale_by_std = scale_by_std
@@ -459,7 +460,7 @@ class LatentDiffusion(DDPM):
         super().__init__(conditioning_key=conditioning_key, *args, **kwargs)
         self.concat_mode = concat_mode
         self.cond_stage_trainable = cond_stage_trainable
-        self.cond_stage_key = cond_stage_key# 条件的数据类型 image,text,class-label等
+        self.cond_stage_key = cond_stage_key# 
         try:
             self.num_downs = len(first_stage_config.params.ddconfig.ch_mult) - 1
         except:
@@ -539,7 +540,7 @@ class LatentDiffusion(DDPM):
             assert config != '__is_unconditional__'
             model = instantiate_from_config(config)
             self.cond_stage_model = model
-
+    # 解码器对去噪网络预测的特征解码，生成新图片，samples为扩散模型采样的数据
     def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
         denoise_row = []
         for zd in tqdm(samples, desc=desc):
@@ -598,7 +599,7 @@ class LatentDiffusion(DDPM):
         dist_right_down = torch.min(1 - arr, dim=-1, keepdims=True)[0]
         edge_dist = torch.min(torch.cat([dist_left_up, dist_right_down], dim=-1), dim=-1)[0]
         return edge_dist
-    # 用距离图生成权重 ，用于什么？# TODO: 用于什么？
+    # 用距离图生成权重 ，与输入的embedding相乘
     def get_weighting(self, h, w, Ly, Lx, device):
         weighting = self.delta_border(h, w)
         # 将权重限制在一定范围内
@@ -714,7 +715,7 @@ class LatentDiffusion(DDPM):
                 c = {ckey: c, 'pos_x': pos_x, 'pos_y': pos_y}
 
         else:
-            # 如果是无条件生成，c为位置编码
+            # 如果是无条件生成，c可以为位置编码或者空
             c = None
             xc = None
             # 如果使用位置编码，计算位置编码
@@ -919,6 +920,7 @@ class LatentDiffusion(DDPM):
 
         return [rescale_bbox(b) for b in bboxes]
 
+    # 使用diffusion模型进行预测,生成图像
     def apply_model(self, x_noisy, t, cond, return_ids=False):
 
         if isinstance(cond, dict):
@@ -1015,7 +1017,7 @@ class LatentDiffusion(DDPM):
             x_recon = fold(o) / normalization
 
         else:
-            
+            # 从含噪声的图片中还原的图像
             x_recon = self.model(x_noisy, t, **cond)
 
         if isinstance(x_recon, tuple) and not return_ids:
@@ -1092,6 +1094,7 @@ class LatentDiffusion(DDPM):
         if return_codebook_ids:
             model_out, logits = model_out
 
+        #如果预测的是噪声，再还原一次
         if self.parameterization == "eps":
             x_recon = self.predict_start_from_noise(x, t=t, noise=model_out)
         elif self.parameterization == "x0":
@@ -1135,8 +1138,8 @@ class LatentDiffusion(DDPM):
         # no noise when t == 0
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
 
-        if return_codebook_ids:
-            return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise, logits.argmax(dim=1)
+        # if return_codebook_ids:
+        #     return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise, logits.argmax(dim=1)
         if return_x0:
             return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise, x0
         else:

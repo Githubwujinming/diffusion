@@ -1,9 +1,11 @@
+import numpy as np
 import torch
 import pytorch_lightning as pl
 import torch.nn.functional as F
 from contextlib import contextmanager
+from ldm.lr_scheduler import LambdaLinearScheduler
 from ldm.modules.ema import LitEma
-
+from packaging import version
 from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 
 from ldm.modules.diffusionmodules.model import Encoder, Decoder
@@ -215,7 +217,7 @@ class VQModel(pl.LightningModule):
             print("Setting up LambdaLR scheduler...")
             scheduler = [
                 {
-                    'scheduler': LambdaLR(opt_ae, lr_lambda=scheduler.schedule),
+                    'scheduler': LambdaLinearScheduler(opt_ae, lr_lambda=scheduler.schedule),
                     'interval': 'step',
                     'frequency': 1
                 },
