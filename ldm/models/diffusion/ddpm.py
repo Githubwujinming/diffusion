@@ -34,7 +34,9 @@ __conditioning_keys__ = {'concat': 'c_concat',
 
 def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode
-    does not change anymore."""
+    does not change anymore.
+    将模型的train方法重写，使得train/eval模式不再改变，调用train()时啥也不做
+    """
     return self
 
 
@@ -457,7 +459,7 @@ class LatentDiffusion(DDPM):
         super().__init__(conditioning_key=conditioning_key, *args, **kwargs)
         self.concat_mode = concat_mode
         self.cond_stage_trainable = cond_stage_trainable
-        self.cond_stage_key = cond_stage_key
+        self.cond_stage_key = cond_stage_key# 条件的数据类型 image,text,class-label等
         try:
             self.num_downs = len(first_stage_config.params.ddconfig.ch_mult) - 1
         except:
@@ -485,11 +487,12 @@ class LatentDiffusion(DDPM):
     @rank_zero_only
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
-        # only for very first batch
+        # only for very first batch 每个epoch的第一个batch的处理函数
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
             assert self.scale_factor == 1., 'rather not use custom rescaling and std-rescaling simultaneously'
             # set rescale weight to 1./std of encodings
             print("### USING STD-RESCALING ###")
+            # first_stage_key为输入的类型，如image，dataloader返回的字典数据
             x = super().get_input(batch, self.first_stage_key)
             x = x.to(self.device)
             encoder_posterior = self.encode_first_stage(x)
@@ -508,13 +511,14 @@ class LatentDiffusion(DDPM):
         if self.shorten_cond_schedule:
             self.make_cond_schedule()
 
+    # 实例化输入的自编码器（encoder-decoder），模型不需要训练
     def instantiate_first_stage(self, config):
         model = instantiate_from_config(config)
         self.first_stage_model = model.eval()
         self.first_stage_model.train = disabled_train
         for param in self.first_stage_model.parameters():
             param.requires_grad = False
-
+    # 实例化提示词的自编码器，用于生成上下文context，可以训练，也可以不训练
     def instantiate_cond_stage(self, config):
         if not self.cond_stage_trainable:
             if config == "__is_first_stage__":
@@ -547,7 +551,9 @@ class LatentDiffusion(DDPM):
         denoise_grid = rearrange(denoise_grid, 'b n c h w -> (b n) c h w')
         denoise_grid = make_grid(denoise_grid, nrow=n_imgs_per_row)
         return denoise_grid
-
+    '''
+    encoder_posterior为输入的编码器的输出, 也可以是高斯分布的对象
+    '''
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
             z = encoder_posterior.sample()
@@ -557,6 +563,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
+    # 对输入条件(提示词，图像等)c 编码
     def get_learned_conditioning(self, c):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
@@ -579,6 +586,7 @@ class LatentDiffusion(DDPM):
 
     def delta_border(self, h, w):
         """
+        返回图像中每个像素点到图像边缘的距离
         :param h: height
         :param w: width
         :return: normalized distance to image border,
@@ -590,9 +598,10 @@ class LatentDiffusion(DDPM):
         dist_right_down = torch.min(1 - arr, dim=-1, keepdims=True)[0]
         edge_dist = torch.min(torch.cat([dist_left_up, dist_right_down], dim=-1), dim=-1)[0]
         return edge_dist
-
+    # 用距离图生成权重 ，用于什么？# TODO: 用于什么？
     def get_weighting(self, h, w, Ly, Lx, device):
         weighting = self.delta_border(h, w)
+        # 将权重限制在一定范围内
         weighting = torch.clip(weighting, self.split_input_params["clip_min_weight"],
                                self.split_input_params["clip_max_weight"], )
         weighting = weighting.view(1, h * w, 1).repeat(1, 1, Ly * Lx).to(device)
@@ -609,12 +618,13 @@ class LatentDiffusion(DDPM):
 
     def get_fold_unfold(self, x, kernel_size, stride, uf=1, df=1):  # todo load once not every time, shorten code
         """
+        分成小块展开
         :param x: img of size (bs, c, h, w)
         :return: n img crops of size (n, bs, c, kernel_size[0], kernel_size[1])
         """
         bs, nc, h, w = x.shape
 
-        # number of crops in image
+        # number of crops in image 卷积后特征尺寸
         Ly = (h - kernel_size[0]) // stride[0] + 1
         Lx = (w - kernel_size[1]) // stride[1] + 1
 
@@ -659,16 +669,21 @@ class LatentDiffusion(DDPM):
 
         return fold, unfold, normalization, weighting
 
+    '''
+    从数据中返回编码后的输入和条件（提示词，位置编码等）
+    '''
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
                   cond_key=None, return_original_cond=False, bs=None):
-        x = super().get_input(batch, k)
+        x = super().get_input(batch, k)# 根据key获取输入，batch是一个字典
         if bs is not None:
             x = x[:bs]
         x = x.to(self.device)
+        # 对输入（图像）编码, z为编码后的结果
         encoder_posterior = self.encode_first_stage(x)
         z = self.get_first_stage_encoding(encoder_posterior).detach()
 
+        # 从数据中获取条件，这个应该是和图像文本对的数据相关的，自定义的数据可以修改这里
         if self.model.conditioning_key is not None:
             if cond_key is None:
                 cond_key = self.cond_stage_key
@@ -681,6 +696,7 @@ class LatentDiffusion(DDPM):
                     xc = super().get_input(batch, cond_key).to(self.device)
             else:
                 xc = x
+            # 如果条件编码器不可训练，或者强制编码，就设置为编码后的结果，否则输入条件数据
             if not self.cond_stage_trainable or force_c_encode:
                 if isinstance(xc, dict) or isinstance(xc, list):
                     # import pudb; pudb.set_trace()
@@ -698,8 +714,10 @@ class LatentDiffusion(DDPM):
                 c = {ckey: c, 'pos_x': pos_x, 'pos_y': pos_y}
 
         else:
+            # 如果是无条件生成，c为位置编码
             c = None
             xc = None
+            # 如果使用位置编码，计算位置编码
             if self.use_positional_encodings:
                 pos_x, pos_y = self.compute_latent_shifts(batch)
                 c = {'pos_x': pos_x, 'pos_y': pos_y}
@@ -711,6 +729,7 @@ class LatentDiffusion(DDPM):
             out.append(xc)
         return out
 
+    # 与encoder_first_stage流程一致，对编码后的隐变量解码。
     @torch.no_grad()
     def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
         if predict_cids:
@@ -849,10 +868,11 @@ class LatentDiffusion(DDPM):
                     print("reducing stride")
 
                 fold, unfold, normalization, weighting = self.get_fold_unfold(x, ks, stride, df=df)
+                # 将输入展开
                 z = unfold(x)  # (bn, nc * prod(**ks), L)
                 # Reshape to img shape
                 z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
-
+                # 每个小块分别编码
                 output_list = [self.first_stage_model.encode(z[:, :, :, :, i])
                                for i in range(z.shape[-1])]
 
@@ -862,6 +882,7 @@ class LatentDiffusion(DDPM):
                 # Reverse reshape to img shape
                 o = o.view((o.shape[0], -1, o.shape[-1]))  # (bn, nc * ks[0] * ks[1], L)
                 # stitch crops together
+                # 将小块合并。
                 decoded = fold(o)
                 decoded = decoded / normalization
                 return decoded
@@ -870,13 +891,14 @@ class LatentDiffusion(DDPM):
                 return self.first_stage_model.encode(x)
         else:
             return self.first_stage_model.encode(x)
-
+    # 一次前向传播过程，返回diffusion的损失
     def shared_step(self, batch, **kwargs):
         x, c = self.get_input(batch, self.first_stage_key)
         loss = self(x, c)
         return loss
 
     def forward(self, x, c, *args, **kwargs):
+        # 随机生成范围内的timstep，为x.shape[0]个，每个样本对应一个
         t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
             assert c is not None
@@ -922,7 +944,7 @@ class LatentDiffusion(DDPM):
             # Reshape to img shape
             z = z.view((z.shape[0], -1, ks[0], ks[1], z.shape[-1]))  # (bn, nc, ks[0], ks[1], L )
             z_list = [z[:, :, :, :, i] for i in range(z.shape[-1])]
-
+            # 不同类型的条件cond处理过程
             if self.cond_stage_key in ["image", "LR_image", "segmentation",
                                        'bbox_img'] and self.model.conditioning_key:  # todo check for completeness
                 c_key = next(iter(cond.keys()))  # get key
@@ -993,6 +1015,7 @@ class LatentDiffusion(DDPM):
             x_recon = fold(o) / normalization
 
         else:
+            
             x_recon = self.model(x_noisy, t, **cond)
 
         if isinstance(x_recon, tuple) and not return_ids:
@@ -1019,20 +1042,24 @@ class LatentDiffusion(DDPM):
         return mean_flat(kl_prior) / np.log(2.0)
 
     def p_losses(self, x_start, cond, t, noise=None):
+        # 随机生成噪声
         noise = default(noise, lambda: torch.randn_like(x_start))
+        # 扩散破坏原始图像
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        # 使用去噪模型预测噪声/原始图像
         model_output = self.apply_model(x_noisy, t, cond)
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
 
-        if self.parameterization == "x0":
+        if self.parameterization == "x0":# 如果是还原图像
             target = x_start
-        elif self.parameterization == "eps":
+        elif self.parameterization == "eps":# 如果是预测噪声
             target = noise
         else:
             raise NotImplementedError()
 
+        # 计算loss
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 

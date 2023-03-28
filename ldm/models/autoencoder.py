@@ -2,6 +2,7 @@ import torch
 import pytorch_lightning as pl
 import torch.nn.functional as F
 from contextlib import contextmanager
+from ldm.modules.ema import LitEma
 
 from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 
