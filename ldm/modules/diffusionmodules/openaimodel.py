@@ -413,19 +413,19 @@ class QKVAttention(nn.Module):
 class UNetModel(nn.Module):
     """
     The full UNet model with attention and timestep embedding.
-    :param in_channels: channels in the input Tensor.
-    :param model_channels: base channel count for the model.
-    :param out_channels: channels in the output Tensor.
-    :param num_res_blocks: number of residual blocks per downsample.
+    :param in_channels: channels in the input Tensor.输入张量的通道数
+    :param model_channels: base channel count for the model.基础通道数，后续每个通道数都是基础通道数的倍数
+    :param out_channels: channels in the output Tensor.输入张昊的通道数
+    :param num_res_blocks: number of residual blocks per downsample.每次下采样前的残差块数
     :param attention_resolutions: a collection of downsample rates at which
         attention will take place. May be a set, list, or tuple.
         For example, if this contains 4, then at 4x downsampling, attention
-        will be used.
+        will be used.设置多少下采样率时使用attention。
     :param dropout: the dropout probability.
-    :param channel_mult: channel multiplier for each level of the UNet.
+    :param channel_mult: channel multiplier for each level of the UNet.每个阶段的通道数是model_channels的多少倍
     :param conv_resample: if True, use learned convolutions for upsampling and
-        downsampling.
-    :param dims: determines if the signal is 1D, 2D, or 3D.
+        downsampling.是否使用带可学习参数的上采样过程
+    :param dims: determines if the signal is 1D, 2D, or 3D. 表明处理的特征是什么类型的
     :param num_classes: if specified (as an int), then this model will be
         class-conditional with `num_classes` classes.
     :param use_checkpoint: use gradient checkpointing to reduce memory usage.
@@ -463,7 +463,7 @@ class UNetModel(nn.Module):
         use_new_attention_order=False,
         use_spatial_transformer=False,    # custom transformer support
         transformer_depth=1,              # custom transformer support
-        context_dim=None,                 # custom transformer support
+        context_dim=None,                 # 如果需要利用context作为条件使用交叉注意力，需要指定context的维度
         n_embed=None,                     # custom support for prediction of discrete ids into codebook of first stage vq model
         legacy=True,
     ):
@@ -472,6 +472,7 @@ class UNetModel(nn.Module):
             assert context_dim is not None, 'Fool!! You forgot to include the dimension of your cross-attention conditioning...'
 
         if context_dim is not None:
+            # 使用spatial_transformer模块内的cross_attention
             assert use_spatial_transformer, 'Fool!! You forgot to use the spatial transformer for your cross-attention conditioning...'
             from omegaconf.listconfig import ListConfig
             if type(context_dim) == ListConfig:
@@ -639,6 +640,7 @@ class UNetModel(nn.Module):
                     )
                 ]
                 ch = model_channels * mult
+                # 当前分辨率在attention_resolutions中，使用attention
                 if ds in attention_resolutions:
                     if num_head_channels == -1:
                         dim_head = ch // num_heads
@@ -711,8 +713,8 @@ class UNetModel(nn.Module):
         """
         Apply the model to an input batch.
         :param x: an [N x C x ...] Tensor of inputs.
-        :param timesteps: a 1-D batch of timesteps.
-        :param context: conditioning plugged in via crossattn
+        :param timesteps: a 1-D batch of timesteps. 扩散的时间步
+        :param context: conditioning plugged in via crossattn 输入的条件上下文
         :param y: an [N] Tensor of labels, if class-conditional.
         :return: an [N x C x ...] Tensor of outputs.
         """
@@ -720,9 +722,11 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
         hs = []
+        # timestemps 嵌入特征
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
+        # 经过两个Linear 和一个Sigmoid转成model_channels * 4长度的向量
         emb = self.time_embed(t_emb)
-
+        # 如果指定了类别数，要与y的shape匹配, y包含了类别信息?
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)

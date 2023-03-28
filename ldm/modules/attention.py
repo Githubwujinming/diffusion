@@ -148,7 +148,7 @@ class SpatialSelfAttention(nn.Module):
 
         return x+h_
 
-
+# context 用于生成交叉注意力的key和value矩阵
 class CrossAttention(nn.Module):
     def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0.):
         super().__init__()

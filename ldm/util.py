@@ -82,9 +82,10 @@ def instantiate_from_config(config):
         elif config == "__is_unconditional__":
             return None
         raise KeyError("Expected key `target` to instantiate.")
+    # get_obj_from_str 获取引用后，传入参数
     return get_obj_from_str(config["target"])(**config.get("params", dict()))
 
-
+# string 指定了调用的路径，返回引用
 def get_obj_from_str(string, reload=False):
     module, cls = string.rsplit(".", 1)
     if reload:

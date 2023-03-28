@@ -54,7 +54,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument(
         "-b",
         "--base",
-        nargs="*",
+        nargs="*", # 表示可以接受多个参数 -b cfg1 cfg2 cfg3...
         metavar="base_config.yaml",
         help="paths to base configs. Loaded from left-to-right. "
              "Parameters can be overwritten or added with command-line options of the form `--key value`.",
@@ -456,15 +456,16 @@ if __name__ == "__main__":
     #           target: importpath
     #           params:
     #               key: value
-
+    # 按指定格式获取时间
     now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 
     # add cwd for convenience and to make classes in this file available when
     # running as `python main.py`
     # (in particular `main.DataModuleFromConfig`)
     sys.path.append(os.getcwd())
-
+    # 解析命令参数
     parser = get_parser()
+    # 将Trainer可用的参数添加到parser中，例如gpu
     parser = Trainer.add_argparse_args(parser)
 
     opt, unknown = parser.parse_known_args()
@@ -474,6 +475,7 @@ if __name__ == "__main__":
             "If you want to resume training in a new log folder, "
             "use -n/--name in combination with --resume_from_checkpoint"
         )
+    # 获取继续训练的checkpoint
     if opt.resume:
         if not os.path.exists(opt.resume):
             raise ValueError("Cannot find {}".format(opt.resume))
@@ -504,42 +506,51 @@ if __name__ == "__main__":
             name = ""
         nowname = now + name + opt.postfix
         logdir = os.path.join(opt.logdir, nowname)
-
+    # 设置目录
     ckptdir = os.path.join(logdir, "checkpoints")
     cfgdir = os.path.join(logdir, "configs")
     seed_everything(opt.seed)
 
     try:
         # init and save configs
+        # 由omegaconf读取配置文件
         configs = [OmegaConf.load(cfg) for cfg in opt.base]
+        # 对于未知的参数，使用omegaconf的from_dotlist方法解析
         cli = OmegaConf.from_dotlist(unknown)
+        # 将已知的参数和未知的参数合并
         config = OmegaConf.merge(*configs, cli)
+        # 获取lightning的配置，如果没有则创建一个
         lightning_config = config.pop("lightning", OmegaConf.create())
         # merge trainer cli with config
         trainer_config = lightning_config.get("trainer", OmegaConf.create())
         # default to ddp
         trainer_config["accelerator"] = "ddp"
+        # 对于trainer的参数，如果在命令行中指定了，则使用命令行中的参数，否则使用配置文件中的参数
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
+        # 如果没有指定gpu，则使用cpu
         if not "gpus" in trainer_config:
             del trainer_config["accelerator"]
             cpu = True
         else:
+            # 如果指定了gpu，则使用gpu
             gpuinfo = trainer_config["gpus"]
             print(f"Running on GPUs {gpuinfo}")
             cpu = False
+        # 将trainer的参数转换为命名空间
         trainer_opt = argparse.Namespace(**trainer_config)
+        # 将设置好的trainer参数添加到lightning_config中
         lightning_config.trainer = trainer_config
 
-        # model
+        # model 从配置文件中获取模型
         model = instantiate_from_config(config.model)
 
         # trainer and callbacks
         trainer_kwargs = dict()
 
-        # default logger configs
+        # default logger configs 日志设置
         default_logger_cfgs = {
-            "wandb": {
+            "wandb": { # wandb日志
                 "target": "pytorch_lightning.loggers.WandbLogger",
                 "params": {
                     "name": nowname,
@@ -556,26 +567,32 @@ if __name__ == "__main__":
                 }
             },
         }
+        # testtube 是pl内的日志工具
+        # 使用的是testtube日志，如果用wandb日志，则将default_logger_cfgs["testtube"]改为default_logger_cfgs["wandb"]
         default_logger_cfg = default_logger_cfgs["testtube"]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
             logger_cfg = OmegaConf.create()
         logger_cfg = OmegaConf.merge(default_logger_cfg, logger_cfg)
+        # 将日志设置添加到trainer_kwargs中
+        # instantiate_from_config方法是根据配置文件中的target和params来实例化对象
         trainer_kwargs["logger"] = instantiate_from_config(logger_cfg)
 
         # modelcheckpoint - use TrainResult/EvalResult(checkpoint_on=metric) to
         # specify which metric is used to determine best models
         default_modelckpt_cfg = {
+            # ModelCheckpoint 的调用路径
             "target": "pytorch_lightning.callbacks.ModelCheckpoint",
+            # 传入ModelCheckpoint的参数
             "params": {
                 "dirpath": ckptdir,
-                "filename": "{epoch:06}",
+                "filename": "{epoch:06}",# 模型保存的文件名
                 "verbose": True,
                 "save_last": True,
             }
         }
-        if hasattr(model, "monitor"):
+        if hasattr(model, "monitor"): # 最好模型依据的指标
             print(f"Monitoring {model.monitor} as checkpoint metric.")
             default_modelckpt_cfg["params"]["monitor"] = model.monitor
             default_modelckpt_cfg["params"]["save_top_k"] = 3
@@ -584,12 +601,13 @@ if __name__ == "__main__":
             modelckpt_cfg = lightning_config.modelcheckpoint
         else:
             modelckpt_cfg =  OmegaConf.create()
+        # 将上面设置modelcheckpoint的参数合并到modelckpt_cfg中
         modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
         print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
         if version.parse(pl.__version__) < version.parse('1.4.0'):
             trainer_kwargs["checkpoint_callback"] = instantiate_from_config(modelckpt_cfg)
 
-        # add callback which sets up log directory
+        # add callback which sets up log directory 回调函数配置
         default_callbacks_cfg = {
             "setup_callback": {
                 "target": "main.SetupCallback",
@@ -629,7 +647,7 @@ if __name__ == "__main__":
             callbacks_cfg = lightning_config.callbacks
         else:
             callbacks_cfg = OmegaConf.create()
-
+        # 设置多少个trainstep保存一次模型
         if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
             print(
                 'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
@@ -647,24 +665,29 @@ if __name__ == "__main__":
                      }
             }
             default_callbacks_cfg.update(default_metrics_over_trainsteps_ckpt_dict)
-
+        # 更新callbacks_cfg
         callbacks_cfg = OmegaConf.merge(default_callbacks_cfg, callbacks_cfg)
+        
         if 'ignore_keys_callback' in callbacks_cfg and hasattr(trainer_opt, 'resume_from_checkpoint'):
             callbacks_cfg.ignore_keys_callback.params['ckpt_path'] = trainer_opt.resume_from_checkpoint
         elif 'ignore_keys_callback' in callbacks_cfg:
             del callbacks_cfg['ignore_keys_callback']
 
+        
+        # 将callbacks_cfg中的参数添加到trainer_kwargs中
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
-
+        # 将设置的参数传入trainer中
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
-        # data
+        # data 获取数据集加载器
         data = instantiate_from_config(config.data)
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
         # calling these ourselves should not be necessary but it is.
         # lightning still takes care of proper multiprocessing though
+        # 如果没有则下载
         data.prepare_data()
+        # 加载数据集
         data.setup()
         print("#### Data #####")
         for k in data.datasets:
@@ -672,6 +695,7 @@ if __name__ == "__main__":
 
         # configure learning rate
         bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
+        # gpu数量
         if not cpu:
             ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
         else:
@@ -709,17 +733,20 @@ if __name__ == "__main__":
 
 
         import signal
-
-        signal.signal(signal.SIGUSR1, melk)
+        # 信号处理，调用相应的函数
+        signal.signal(signal.SIGUSR1, melk)# 如果有信号1，保存模型
         signal.signal(signal.SIGUSR2, divein)
 
         # run
         if opt.train:
             try:
+                # 训练模型
                 trainer.fit(model, data)
             except Exception:
+                # 如果出现异常，保存模型
                 melk()
                 raise
+        # 测试模型
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data)
     except Exception:
@@ -739,3 +766,7 @@ if __name__ == "__main__":
             os.rename(logdir, dst)
         if trainer.global_rank == 0:
             print(trainer.profiler.summary())
+'''
+    main.py 就是读取参数，根据参数实例化model, data, trainer对象
+    然后调用train.py中的train函数，
+'''
