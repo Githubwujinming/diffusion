@@ -3,3 +3,7 @@ latent_diffusion.egg-info/*
 configs/*
 *.yaml
 data/*
+*.pyc
+*experiments/*
+*.png
+*.jpg
