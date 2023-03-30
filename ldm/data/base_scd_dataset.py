@@ -9,22 +9,23 @@ from torchvision import transforms
 from scipy import ndimage
 from math import ceil
 
+MEAN       = [0.485, 0.456, 0.406]
+STD        = [0.229, 0.224, 0.225]
 class SCDBaseDataSet(Dataset):
-    def __init__(self, data_dir, split, mean, std, base_size=None, augment=True, val=False,
+    def __init__(self, data_dir, split, base_size=None, augment=True, 
                 jitter=False, use_weak_lables=False, weak_labels_output=None, crop_size=None, scale=False, flip=False, rotate=False,
-                blur=False, return_id=False, percnt_lbl=None,data_len=-1):
+                blur=False, return_id=False, data_len=-1):
 
         self.root = data_dir
         self.split = split
-        self.mean = mean
-        self.std = std
+        self.mean = MEAN
+        self.std = STD
         self.augment = augment
         self.crop_size = crop_size
         self.jitter = jitter
-        self.image_padding = (np.array(mean)*255.).tolist()
+        self.image_padding = (np.array(self.mean)*255.).tolist()
         self.return_id = return_id
-        self.percnt_lbl = percnt_lbl
-        self.val = val
+        self.val = True if split in ['val','test'] else False
 
         self.use_weak_lables = use_weak_lables
         self.weak_labels_output = weak_labels_output
@@ -38,7 +39,7 @@ class SCDBaseDataSet(Dataset):
 
         self.jitter_tf = transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1)
         self.to_tensor = transforms.ToTensor()
-        self.normalize = transforms.Normalize(mean, std)
+        self.normalize = transforms.Normalize(MEAN, STD)
 
         self.files = []
         self._set_files()
@@ -184,7 +185,7 @@ class SCDBaseDataSet(Dataset):
         return len(self.files)
   
     def __getitem__(self, index):
-        image_A, image_B, A_label, B_label =  self._load_data(index)
+        image_A, image_B, A_label, B_label, image_id =  self._load_data(index)
         
         if self.val:
             image_A, image_B, A_label, B_label = self._val_augmentation(image_A, image_B, A_label, B_label)
@@ -197,9 +198,9 @@ class SCDBaseDataSet(Dataset):
         return {
             'image_A': image_A,
             'image_B': image_B,
-            'A_label': A_label,
-            'B_label': B_label,
-            'diff': diff,
+            'target_A': A_label,
+            'target_B': B_label,
+            'image_id': image_id
         }
 
     def __repr__(self):

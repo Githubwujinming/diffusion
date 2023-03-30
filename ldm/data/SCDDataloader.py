@@ -8,8 +8,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from data.base_dataloader import BaseDataLoader
-from data.base_scd_dataset import SCDBaseDataSet
+from .base_dataloader import BaseDataLoader
+from .base_scd_dataset import SCDBaseDataSet
 totensor = torchvision.transforms.ToTensor()
 IMG_FOLDER_NAME = "A"
 IMG_POST_FOLDER_NAME = 'B'
@@ -55,7 +55,7 @@ def Index2Color(pred):
     return colormap[x, :]
 
 def TensorIndex2Color(pred):
-    colormap = torch.as_tensor(ST_COLORMAP, dtype=torch.uint8)
+    colormap = torch.as_tensor(ST_COLORMAP, dtype=torch.uint8).to(pred.device)
     x = pred.long()
     return colormap[x, :]
 
@@ -64,12 +64,20 @@ def transform_augment_cd(img, split='val', min_max=(0, 1)):
     ret_img = img * (min_max[1] - min_max[0]) + min_max[0]
     return ret_img
 
-class ImageDataset(SCDBaseDataSet):
-    def __init__(self, **kwargs):
-        self.num_classes = 7
-        self.data_len = kwargs['data_len']
-        super(ImageDataset, self).__init__(**kwargs)
 
+class ImageDataset(SCDBaseDataSet):
+    def __init__(self, data_dir, split, augment=True,
+                jitter=False, use_weak_lables=False, weak_labels_output=None, crop_size=None, scale=False, flip=False, rotate=False,
+                blur=False, percnt_lbl=None, data_len=-1, **kwargs):
+        self.num_classes = 7
+        self.data_len = data_len
+        self.percnt_lbl = percnt_lbl
+        self.split = split
+        super(ImageDataset, self).__init__(data_dir=data_dir, split=split, augment=augment,
+                                           jitter=jitter, use_weak_lables=use_weak_lables, weak_labels_output=weak_labels_output,
+                                           crop_size=crop_size, scale=scale, flip=flip, rotate=rotate, blur=blur,
+                                            )
+    
     def _set_files(self):
         if self.split == "val":
             file_list = os.path.join(self.root, 'list', f"{self.split}" + ".txt")
@@ -101,16 +109,13 @@ class ImageDataset(SCDBaseDataSet):
         img_lb_Al = Color2Index(Image.open(AL_path).convert("RGB"))
         img_lb_Bl = Color2Index(Image.open(BL_path).convert("RGB"))
         # label_bn = (image_A>0).astype(np.uint8)
-        return image_A, image_B, img_lb_Al, img_lb_Bl
+        return image_A, image_B, img_lb_Al, img_lb_Bl, image_id
+    
     
 
 class SCDDataLoader(BaseDataLoader):
-    def __init__(self, kwargs):
-        self.MEAN       = [0.485, 0.456, 0.406]
-        self.STD        = [0.229, 0.224, 0.225]
+    def __init__(self, dataset, **kwargs):
         self.batch_size = kwargs.pop('batch_size')
-        kwargs['mean']  = self.MEAN
-        kwargs['std']   = self.STD
         
         try:
             shuffle = kwargs.pop('shuffle')
@@ -118,5 +123,5 @@ class SCDDataLoader(BaseDataLoader):
             shuffle = False
         num_workers = kwargs.pop('num_workers')
         
-        self.dataset = ImageDataset(**kwargs)
-        super(SCDDataLoader, self).__init__(self.dataset, self.batch_size, shuffle, num_workers, val_split=None)
+        self.dataset = dataset
+        super().__init__(self.dataset, self.batch_size, shuffle, num_workers, val_split=None)

@@ -1,4 +1,5 @@
 from functools import partial
+from itertools import cycle
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -39,32 +40,37 @@ class SequentialLoader:
         self.dataloaders = dataloaders
 
     def __len__(self):
-        return sum(len(d) for d in self.dataloaders)
+        return max(len(d) for d in self.dataloaders)
 
     def __iter__(self):
         for dataloader in self.dataloaders:
             yield from dataloader
             
 class SCDDatasetFromConfig(pl.LightningDataModule):
-    def __init__(self, batch_size, train_supervised=None, train_unsupervised=None, validation=None, test=None, predict=None,
-                 wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
-                 shuffle_val_dataloader=False):
+    def __init__(self, train_supervised=None, train_unsupervised=None, validation=None, test=None, predict=None,
+                 wrap=False, num_workers=4, use_worker_init_fn=False,
+                 sup_train_size=4, unsup_train_size=8, val_size=8,
+                 test_size=1):
         super().__init__()
-        self.batch_size = batch_size
         self.dataset_configs = dict()
-        self.num_workers = num_workers if num_workers is not None else batch_size * 2
+        self.sup_train_size = sup_train_size
+        self.unsup_train_size = unsup_train_size
+        self.val_size = val_size
+        self.test_size = test_size
+        self.num_workers = num_workers 
         self.use_worker_init_fn = use_worker_init_fn
         if train_supervised is not None:
             if train_unsupervised is not None:
-                self.dataset_configs["unsup_train"] = train_supervised
-            self.dataset_configs["sup_train"] = train_unsupervised
+                self.dataset_configs["unsup_train"] = train_unsupervised
+            self.dataset_configs["sup_train"] = train_supervised
             self.train_dataloader = self._train_dataloader
         if validation is not None:
             self.dataset_configs["validation"] = validation
-            self.val_dataloader = partial(self._val_dataloader, shuffle=shuffle_val_dataloader)
+            self.val_dataloader = partial(self._val_dataloader, shuffle=False)
+
         if test is not None:
             self.dataset_configs["test"] = test
-            self.test_dataloader = partial(self._test_dataloader, shuffle=shuffle_test_loader)
+            self.test_dataloader = partial(self._test_dataloader, False)
         if predict is not None:
             self.dataset_configs["predict"] = predict
             self.predict_dataloader = self._predict_dataloader
@@ -88,15 +94,15 @@ class SCDDatasetFromConfig(pl.LightningDataModule):
             init_fn = worker_init_fn
         else:
             init_fn = None
-        sup_loader = SCDDataLoader(self.datasets["sup_train"], batch_size=self.batch_size,
+        sup_loader = SCDDataLoader(self.datasets["sup_train"], batch_size=self.sup_train_size,
                         num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
                         worker_init_fn=init_fn)
         
-        if self.datasets["unsup_train"] is not None:
-            unsup_loader = SCDDataLoader(self.datasets["unsup_train"], batch_size=self.batch_size,
+        if "unsup_train" in self.datasets.keys():
+            unsup_loader = SCDDataLoader(self.datasets["unsup_train"], batch_size=self.unsup_train_size,
                         num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
                         worker_init_fn=init_fn)
-            return SequentialLoader(sup_loader, unsup_loader)
+            return SequentialLoader(cycle(sup_loader), unsup_loader)
         else:
             return sup_loader
 
@@ -106,13 +112,13 @@ class SCDDatasetFromConfig(pl.LightningDataModule):
         else:
             init_fn = None
         return SCDDataLoader(self.datasets["validation"],
-                          batch_size=self.batch_size,
+                          batch_size=self.val_size,
                           num_workers=self.num_workers,
                           worker_init_fn=init_fn,
                           shuffle=shuffle)
 
     def _test_dataloader(self, shuffle=False):
-        is_iterable_dataset = isinstance(self.datasets['train'], Txt2ImgIterableBaseDataset)
+        is_iterable_dataset = isinstance(self.datasets['test'], Txt2ImgIterableBaseDataset)
         if is_iterable_dataset or self.use_worker_init_fn:
             init_fn = worker_init_fn
         else:
@@ -121,7 +127,7 @@ class SCDDatasetFromConfig(pl.LightningDataModule):
         # do not shuffle dataloader for iterable dataset
         shuffle = shuffle and (not is_iterable_dataset)
 
-        return SCDDataLoader(self.datasets["test"], batch_size=self.batch_size,
+        return SCDDataLoader(self.datasets["test"], batch_size=self.test_size,
                           num_workers=self.num_workers, worker_init_fn=init_fn, shuffle=shuffle)
 
     def _predict_dataloader(self, shuffle=False):
