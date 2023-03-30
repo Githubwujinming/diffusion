@@ -7,6 +7,7 @@ from ldm.lr_scheduler import LambdaLinearScheduler
 from ldm.modules.ema import LitEma
 from packaging import version
 from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
+from torch.optim.lr_scheduler import LambdaLR
 
 from ldm.modules.diffusionmodules.model import Encoder, Decoder
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
