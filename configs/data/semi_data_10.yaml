@@ -1,0 +1,49 @@
+   
+data:
+  target: ldm.data.SCDDatasetFromConfig
+  params:
+    num_workers: 4
+    wrap: false
+    sup_train_size: 8
+    unsup_train_size: 8
+    val_size: 8
+    test_size: 1
+    train_supervised:
+      target: ldm.data.SCDDataloader.ImageDataset
+      params: 
+        data_dir: "/data/datasets/SECOND_scd/"
+        crop_size: 512
+        scale: True
+        augment: True
+        flip: True
+        rotate: True
+        blur: True
+        split: "train_supervised"
+        percnt_lbl: 10
+        data_len: -1
+    train_unsupervised:
+      target: ldm.data.SCDDataloader.ImageDataset
+      params:
+        data_dir: "/data/datasets/SECOND_scd/"
+        crop_size: 512
+        base_size: 512
+        scale: True
+        augment: True
+        flip: True
+        rotate: True
+        blur: True
+        split: "train_unsupervised"
+        percnt_lbl: 10
+        data_len: -1
+    validation:
+      target: ldm.data.SCDDataloader.ImageDataset
+      params: 
+        data_dir: "/data/datasets/SECOND_scd/"
+        split: "val"
+        data_len: -1
+    test:
+      target: ldm.data.SCDDataloader.ImageDataset
+      params: 
+        data_dir: "/data/datasets/SECOND_scd/"
+        split: "test"
+        data_len: -1
