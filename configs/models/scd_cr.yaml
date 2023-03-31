@@ -11,10 +11,10 @@ model:
       target: ldm.lr_scheduler.LambdaLinearScheduler
       params:
         warm_up_steps: [100]
-        cycle_lengths: [10000]
+        cycle_lengths: [20000]
         f_start: [1.e-4]
         f_max: [1]
-        f_min: [-1]
+        f_min: [1.e-3]
     confidence_masking: False
     confidence_th: 0.5
     rc_config:
