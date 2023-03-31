@@ -415,7 +415,7 @@ class UNetModel(nn.Module):
     The full UNet model with attention and timestep embedding.
     :param in_channels: channels in the input Tensor.输入张量的通道数
     :param model_channels: base channel count for the model.基础通道数，后续每个通道数都是基础通道数的倍数
-    :param out_channels: channels in the output Tensor.输入张昊的通道数
+    :param out_channels: channels in the output Tensor.输出张量的通道数
     :param num_res_blocks: number of residual blocks per downsample.每次下采样前的残差块数
     :param attention_resolutions: a collection of downsample rates at which
         attention will take place. May be a set, list, or tuple.
