@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
-from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.utilities import rank_zero_only
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from ldm.modules.ema import LitEma
@@ -47,20 +47,20 @@ def uniform_on_device(r1, r2, shape, device):
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(self,
-                 unet_config,
-                 timesteps=1000,
+                 unet_config,# Unet网络的参数
+                 timesteps=1000,# 正向链的总步数
                  beta_schedule="linear",
                  loss_type="l2",
-                 ckpt_path=None,
+                 ckpt_path=None,# 加载预训练模型的路径
                  ignore_keys=[],
                  load_only_unet=False,
                  monitor="val/loss",
-                 use_ema=True,
-                 first_stage_key="image",
+                 use_ema=True,# ema方式更新权重 
+                 first_stage_key="image",#
                  image_size=256,
                  channels=3,
                  log_every_t=100,
-                 clip_denoised=True,
+                 clip_denoised=True,# 是否对denoised进行clip,即将denoised的预测值限制在[-1,1]之间
                  linear_start=1e-4,
                  linear_end=2e-2,
                  cosine_s=8e-3,
@@ -71,7 +71,7 @@ class DDPM(pl.LightningModule):
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
                  scheduler_config=None,
-                 use_positional_encodings=False,
+                 use_positional_encodings=False,# 是否使用位置编码
                  learn_logvar=False,
                  logvar_init=0.,
                  ):
@@ -83,7 +83,7 @@ class DDPM(pl.LightningModule):
         self.clip_denoised = clip_denoised
         self.log_every_t = log_every_t
         self.first_stage_key = first_stage_key
-        self.image_size = image_size  # try conv?
+        self.image_size = image_size  # try conv?隐特征的尺寸
         self.channels = channels
         self.use_positional_encodings = use_positional_encodings
         self.model = DiffusionWrapper(unet_config, conditioning_key)
@@ -285,6 +285,7 @@ class DDPM(pl.LightningModule):
         return (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
 
+    # 计算损失
     def get_loss(self, pred, target, mean=True):
         if self.loss_type == 'l1':
             loss = (target - pred).abs()
@@ -319,7 +320,7 @@ class DDPM(pl.LightningModule):
 
         loss_dict.update({f'{log_prefix}/loss_simple': loss.mean()})
         loss_simple = loss.mean() * self.l_simple_weight
-
+    
         loss_vlb = (self.lvlb_weights[t] * loss).mean()
         loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb})
 
@@ -348,7 +349,7 @@ class DDPM(pl.LightningModule):
         loss, loss_dict = self(x)
         return loss, loss_dict
 
-    # 单步前向过程，返回loss
+    # 单步前向过程和损失计算，返回loss
     def training_step(self, batch, batch_idx):
         loss, loss_dict = self.shared_step(batch)
 
@@ -432,11 +433,16 @@ class DDPM(pl.LightningModule):
 
 
 class LatentDiffusion(DDPM):
-    """main class"""
+    """main class
+    num_timesteps_cond: cond的扩散步数,bs=10时，num_timesteps_cond为7时，
+        生成大小为7，每个元素小于10的列表，每个元素表示对于每个样本，其输入的cond先扩散的步数，
+        剩余的3个则扩散timesteps-1步, 为1时则cond不扩散
+                 
+    """
     def __init__(self,
                  first_stage_config,# 输入的自编码器配置信息
                  cond_stage_config,# 条件的配置信息
-                 num_timesteps_cond=None,# 最大步数
+                 num_timesteps_cond=None,
                  cond_stage_key="image",# 条件的key
                  cond_stage_trainable=False,# 条件的编码器是否可训练
                  concat_mode=True,
@@ -480,6 +486,7 @@ class LatentDiffusion(DDPM):
             self.init_from_ckpt(ckpt_path, ignore_keys)
             self.restarted_from_ckpt = True
 
+    # 生成cond的频数
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
         ids = torch.round(torch.linspace(0, self.num_timesteps - 1, self.num_timesteps_cond)).long()
@@ -487,8 +494,8 @@ class LatentDiffusion(DDPM):
 
     @rank_zero_only
     @torch.no_grad()
-    def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
-        # only for very first batch 每个epoch的第一个batch的处理函数
+    def on_train_batch_start(self, batch, batch_idx):
+        # only for very first batch 第一个epoch的第一个batch的才处理,计算scale_factor
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
             assert self.scale_factor == 1., 'rather not use custom rescaling and std-rescaling simultaneously'
             # set rescale weight to 1./std of encodings
@@ -671,7 +678,8 @@ class LatentDiffusion(DDPM):
         return fold, unfold, normalization, weighting
 
     '''
-    从数据中返回编码后的输入和条件（提示词，位置编码等）
+    从数据中返回编码后的输入和条件（提示词，位置编码等）,get_input内
+    对图像压缩，得到的编码结果再以ddpm 方式扩散训练
     '''
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
@@ -1065,7 +1073,7 @@ class LatentDiffusion(DDPM):
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
-        logvar_t = self.logvar[t].to(self.device)
+        logvar_t = self.logvar.to(t.device)[t]
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
         # loss = loss_simple / torch.exp(self.logvar) + self.logvar
         if self.learn_logvar:

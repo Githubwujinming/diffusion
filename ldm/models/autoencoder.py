@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from ldm.lr_scheduler import LambdaLinearScheduler
 from ldm.modules.ema import LitEma
 from packaging import version
-from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
+from taming.modules.vqvae.quantize import VectorQuantizer
 from torch.optim.lr_scheduler import LambdaLR
 
 from ldm.modules.diffusionmodules.model import Encoder, Decoder
@@ -41,8 +41,9 @@ class VQModel(pl.LightningModule):
         self.decoder = Decoder(**ddconfig)
         self.loss = instantiate_from_config(lossconfig)
         self.quantize = VectorQuantizer(n_embed, embed_dim, beta=0.25,
-                                        remap=remap,
-                                        sane_index_shape=sane_index_shape)
+                                        # remap=remap,
+                                        # sane_index_shape=sane_index_shape
+                                        )
         self.quant_conv = torch.nn.Conv2d(ddconfig["z_channels"], embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
         if colorize_nlabels is not None:
