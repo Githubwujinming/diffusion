@@ -59,7 +59,7 @@ def get_parser(**parser_kwargs):
         metavar="base_config.yaml",
         help="paths to base configs. Loaded from left-to-right. "
              "Parameters can be overwritten or added with command-line options of the form `--key value`.",
-        default=['configs/scd/scd_ldm.yaml'],
+        default=['configs/models/test.yaml'],
     )
     parser.add_argument(
         "-t",
@@ -512,7 +512,7 @@ if __name__ == "__main__":
         }
         if hasattr(model, "monitor"): # 最好模型依据的指标
             print(f"Monitoring {model.monitor} as checkpoint metric.")
-            default_modelckpt_cfg["params"]["mode"] = 'max'
+            # default_modelckpt_cfg["params"]["mode"] = 'max'
             default_modelckpt_cfg["params"]["monitor"] = model.monitor
             default_modelckpt_cfg["params"]["save_top_k"] = 5# 保存最好的3个模型
 
