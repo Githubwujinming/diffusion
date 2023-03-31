@@ -1,10 +1,11 @@
 import argparse, os, sys, datetime, glob, importlib, csv
+import logging
 import numpy as np
 import time
 import torch
 import torchvision
 import pytorch_lightning as pl
-
+from utils.logger import Logger, setup_logger
 from packaging import version
 from omegaconf import OmegaConf
 from torch.utils.data import random_split, DataLoader, Dataset, Subset
@@ -79,7 +80,7 @@ def get_parser(**parser_kwargs):
     )
     parser.add_argument(
         "-p",
-        "--project",
+        "--project",# project of wandb
         help="name of new or path to existing project"
     )
     parser.add_argument(
@@ -182,17 +183,18 @@ class SetupCallback(Callback):
             os.makedirs(self.logdir, exist_ok=True)
             os.makedirs(self.ckptdir, exist_ok=True)
             os.makedirs(self.cfgdir, exist_ok=True)
-
+            
+            
             if "callbacks" in self.lightning_config:
                 if 'metrics_over_trainsteps_checkpoint' in self.lightning_config['callbacks']:
                     os.makedirs(os.path.join(self.ckptdir, 'trainstep_checkpoints'), exist_ok=True)
-            print("Project config")
-            print(OmegaConf.to_yaml(self.config))
+            # print("Project config")
+            # print(OmegaConf.to_yaml(self.config))
             OmegaConf.save(self.config,
                            os.path.join(self.cfgdir, "{}-project.yaml".format(self.now)))
 
-            print("Lightning config")
-            print(OmegaConf.to_yaml(self.lightning_config))
+            # print("Lightning config")
+            # print(OmegaConf.to_yaml(self.lightning_config))
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
                            os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.now)))
 
@@ -338,56 +340,17 @@ class CUDACallback(Callback):
         except AttributeError:
             pass
 
-
+import pytz
 if __name__ == "__main__":
-    # custom parser to specify config files, train, test and debug mode,
-    # postfix, resume.
-    # `--key value` arguments are interpreted as arguments to the trainer.
-    # `nested.key=value` arguments are interpreted as config parameters.
-    # configs are merged from left-to-right followed by command line parameters.
-
-    # model:
-    #   base_learning_rate: float
-    #   target: path to lightning module
-    #   params:
-    #       key: value
-    # data:
-    #   target: main.DataModuleFromConfig
-    #   params:
-    #      batch_size: int
-    #      wrap: bool
-    #      train:
-    #          target: path to train dataset
-    #          params:
-    #              key: value
-    #      validation:
-    #          target: path to validation dataset
-    #          params:
-    #              key: value
-    #      test:
-    #          target: path to test dataset
-    #          params:
-    #              key: value
-    # lightning: (optional, has sane defaults and can be specified on cmdline)
-    #   trainer:
-    #       additional arguments to trainer
-    #   logger:
-    #       logger to instantiate
-    #   modelcheckpoint:
-    #       modelcheckpoint to instantiate
-    #   callbacks:
-    #       callback1:
-    #           target: importpath
-    #           params:
-    #               key: value
-    # 按指定格式获取时间
-    now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    now = datetime.datetime.now(pytz.timezone('Asia/Shanghai')).strftime('%m-%d_%H-%M')
 
     # add cwd for convenience and to make classes in this file available when
     # running as `python main.py`
     # (in particular `main.DataModuleFromConfig`)
+    # 
     sys.path.append(os.getcwd())
-    # 解析命令参数
+    # 解析命令给定的参数，保存在opt变量中，后面的cfg是解析配置文件获取的参数，
+    # 如果有重复的参数，以命令行参数为准，相同设置由opt覆盖
     parser = get_parser()
     # 将Trainer可用的参数添加到parser中，例如gpu
     parser = Trainer.add_argparse_args(parser)
@@ -412,9 +375,9 @@ if __name__ == "__main__":
         else:
             assert os.path.isdir(opt.resume), opt.resume
             logdir = opt.resume.rstrip("/")
-            # 加载最后的checkpoint继续训练
+            # 最新的checkpoint路径
             ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
-
+        # 设置继续训练的checkpoint的路径，后面会保存至trainer_config中，最后用于创建trainer
         opt.resume_from_checkpoint = ckpt
         base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*.yaml")))
         opt.base = base_configs + opt.base
@@ -422,23 +385,30 @@ if __name__ == "__main__":
         nowname = _tmp[-1]
     else:
         if opt.name:
-            name = "_" + opt.name
+            name = opt.name + "_"
         elif opt.base:
             cfg_fname = os.path.split(opt.base[0])[-1]
             cfg_name = os.path.splitext(cfg_fname)[0]
-            name = "_" + cfg_name
+            name = cfg_name + "_"
         else:
             name = ""
-        nowname = now + name + opt.postfix
+        nowname = name + opt.postfix + now
         logdir = os.path.join(opt.logdir, nowname)
     # 设置目录
     ckptdir = os.path.join(logdir, "checkpoints")
     cfgdir = os.path.join(logdir, "configs")
+    
+    #setting logging
+    os.makedirs(os.path.join(logdir, 'logs'), exist_ok=True)
+    setup_logger('train', os.path.join(logdir, 'logs'), 'train', level=logging.INFO) 
+    setup_logger('val', os.path.join(logdir, 'logs'), 'val', level=logging.INFO)
+    train_logger = logging.getLogger('train')
+    train_logger.info(f'================Training started in dir {logdir}======================')
     seed_everything(opt.seed)
 
     try:
         # init and save configs
-        # 由omegaconf读取配置文件
+        # 由omegaconf读取多个配置文件，可以将设置分散到多个配置文件中，如data.yaml, model.yaml, pl.yaml
         configs = [OmegaConf.load(cfg) for cfg in opt.base]
         # 对于未知的参数，使用omegaconf的from_dotlist方法解析
         cli = OmegaConf.from_dotlist(unknown)
@@ -454,19 +424,40 @@ if __name__ == "__main__":
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
         # 如果没有指定gpu，则使用cpu noet: pl设置gpu的api已经改变了
-        if not 'gpus' in trainer_config:
+        # if not 'gpus' in trainer_config:
             del trainer_config["accelerator"]
             cpu = True
         else:
             # 如果指定了gpu，则使用gpu
             gpuinfo = trainer_config["gpus"]
-            print(f"Running on GPUs {gpuinfo}")
+            train_logger.info(f"Running on GPUs {gpuinfo} \n")
             cpu = False
-        # 将trainer的参数转换为命名空间
+        # 将trainer的参数转换为命名空间,里面的属性可以通过.来访问
         trainer_opt = argparse.Namespace(**trainer_config)
         # 将设置好的trainer参数添加到lightning_config中
         lightning_config.trainer = trainer_config
 
+        # data 获取数据集加载器
+        data = instantiate_from_config(config.data)
+        # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
+        # calling these ourselves should not be necessary but it is.
+        # lightning still takes care of proper multiprocessing though
+        # 如果没有则下载
+        # data.prepare_data()
+        # 加载数据集
+        data.setup()
+        
+        print("#### Data Setup #####")
+        for k in data.datasets:
+            print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+
+        # 计算每个epoch的迭代次数,在计算无监督部分的损失权重时需要用到
+        if hasattr(config.data.params, "train_unsupervised"):
+            iters_per_epoch = len(data.train_dataloader())
+            num_epochs = lightning_config.trainer.max_epochs
+            config.model.params.update({"iters_per_epoch": iters_per_epoch,
+                                        "num_epochs": num_epochs})
+    
         # model 从配置文件中获取模型
         model = instantiate_from_config(config.model)
 
@@ -507,6 +498,7 @@ if __name__ == "__main__":
 
         # modelcheckpoint - use TrainResult/EvalResult(checkpoint_on=metric) to
         # specify which metric is used to determine best models
+        # modelckpt_cfg是用来设置模型保存callback的参数,以epoch为单位保存模型
         default_modelckpt_cfg = {
             # ModelCheckpoint 的调用路径
             "target": "pytorch_lightning.callbacks.ModelCheckpoint",
@@ -521,7 +513,7 @@ if __name__ == "__main__":
         if hasattr(model, "monitor"): # 最好模型依据的指标
             print(f"Monitoring {model.monitor} as checkpoint metric.")
             default_modelckpt_cfg["params"]["monitor"] = model.monitor
-            default_modelckpt_cfg["params"]["save_top_k"] = 3
+            default_modelckpt_cfg["params"]["save_top_k"] = 3# 保存最好的3个模型
 
         if "modelcheckpoint" in lightning_config:
             modelckpt_cfg = lightning_config.modelcheckpoint
@@ -573,7 +565,7 @@ if __name__ == "__main__":
             callbacks_cfg = lightning_config.callbacks
         else:
             callbacks_cfg = OmegaConf.create()
-        # 设置多少个trainstep保存一次模型
+        # 设置多少个train_step保存一次模型, 
         if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
             print(
                 'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
@@ -607,19 +599,7 @@ if __name__ == "__main__":
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
-        # data 获取数据集加载器
-        data = instantiate_from_config(config.data)
-        # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
-        # calling these ourselves should not be necessary but it is.
-        # lightning still takes care of proper multiprocessing though
-        # 如果没有则下载
-        # data.prepare_data()
-        # 加载数据集
-        data.setup()
-        print("#### Data Setup #####")
-        for k in data.datasets:
-            print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
-
+        
         # configure learning rate
         bs, base_lr = 8, config.model.base_learning_rate
         # gpu数量
