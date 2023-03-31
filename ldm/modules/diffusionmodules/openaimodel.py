@@ -75,12 +75,15 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
     """
     A sequential module that passes timestep embeddings to the children that
     support it as an extra input.
+    为了使输入不一致的模块能够顺利的串联起来，我们需要一个能够将输入传递给子模块的模块。
     """
 
     def forward(self, x, emb, context=None):
         for layer in self:
+            # timestepblock 只有两个位置参数
             if isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
+            # spatialtransformer 有上下文参数
             elif isinstance(layer, SpatialTransformer):
                 x = layer(x, context)
             else:
@@ -420,7 +423,7 @@ class UNetModel(nn.Module):
     :param attention_resolutions: a collection of downsample rates at which
         attention will take place. May be a set, list, or tuple.
         For example, if this contains 4, then at 4x downsampling, attention
-        will be used.设置多少下采样率时使用attention。
+        will be used.设置下采样多少倍时使用attention。
     :param dropout: the dropout probability.
     :param channel_mult: channel multiplier for each level of the UNet.每个阶段的通道数是model_channels的多少倍
     :param conv_resample: if True, use learned convolutions for upsampling and
@@ -461,7 +464,7 @@ class UNetModel(nn.Module):
         use_scale_shift_norm=False,
         resblock_updown=False,
         use_new_attention_order=False,
-        use_spatial_transformer=False,    # custom transformer support
+        use_spatial_transformer=False,    # 使用交叉注意力时要打开，注意力模块为spatial_transformer
         transformer_depth=1,              # custom transformer support
         context_dim=None,                 # 如果需要利用context作为条件使用交叉注意力，需要指定context的维度
         n_embed=None,                     # custom support for prediction of discrete ids into codebook of first stage vq model
@@ -559,6 +562,7 @@ class UNetModel(nn.Module):
                             ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
                         )
                     )
+                    
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
                 input_block_chans.append(ch)
