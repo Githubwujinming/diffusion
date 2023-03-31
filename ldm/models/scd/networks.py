@@ -1,188 +1,11 @@
-import itertools
-import os
-import PIL
-import torch
-import numpy as np
-import torch.nn as nn
-from torchvision import models
-from torch.nn import functional as F
-from einops.layers.torch import Rearrange
-from einops import rearrange
-import pytorch_lightning as pl
-from torchvision import transforms
-from ldm.lr_scheduler import LambdaLinearScheduler
-from torch.optim.lr_scheduler import LambdaLR
-
-# from utils.lr_scheduler import LambdaLinearScheduler
-from ldm.util import instantiate_from_config
-from utils.SCD_metrics import RunningMetrics
-from utils.scdloss import SCDLoss
-from utils.helpers import DeNormalize
-import torch.optim.lr_scheduler as lrs
-from ldm.data import Index2Color, Color2Index, TensorIndex2Color
-
-def conv1x1(in_planes, out_planes, stride=1):
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
-
-def conv3x3(in_planes, out_planes, stride=1):
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
-
-class ResBlock(nn.Module):
-    expansion = 1
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
-        super(ResBlock, self).__init__()
-        self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.downsample = downsample
-        self.stride = stride
-    
-    def forward(self, x):
-        identity = x
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample is not None:
-            identity = self.downsample(x)
-
-        out += identity
-        out = self.relu(out)
-
-        return out
-    
-from torchvision import models
-class FCN(nn.Module):
-    def __init__(self, in_channels=3,  pretrained=True):
-        super(FCN, self).__init__()
-        resnet = models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1)
-        newconv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        newconv1.weight.data[:, 0:3, :, :].copy_(resnet.conv1.weight.data[:, 0:3, :, :])
-        if in_channels>3:
-          newconv1.weight.data[:, 3:in_channels, :, :].copy_(resnet.conv1.weight.data[:, 0:in_channels-3, :, :])
-          
-        self.layer0 = nn.Sequential(newconv1, resnet.bn1, resnet.relu)
-        self.maxpool = resnet.maxpool
-        self.layer1 = resnet.layer1
-        self.layer2 = resnet.layer2
-        self.layer3 = resnet.layer3
-        self.layer4 = resnet.layer4
-                                  
-    def _make_layer(self, block, inplanes, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or inplanes != planes:
-            downsample = nn.Sequential(
-                conv1x1(inplanes, planes, stride),
-                nn.BatchNorm2d(planes) )
-
-        layers = []
-        layers.append(block(inplanes, planes, stride, downsample))
-        self.inplanes = planes * block.expansion
-        for _ in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
-        return nn.Sequential(*layers)
-
-class Encoder(nn.Module):
-    def __init__(self, in_channels=3, pretrained=True):
-        super().__init__()        
-        self.FCN = FCN(in_channels,pretrained=pretrained)
-    
-    def base_forward(self, x):
-       
-        x = self.FCN.layer0(x) #size:1/2
-        x = self.FCN.maxpool(x) #size:1/4
-        x = self.FCN.layer1(x) #size:1/4
-        x = self.FCN.layer2(x) #size:1/8
-        x = self.FCN.layer3(x) #size:1/8
-        x = self.FCN.layer4(x) #size:1/8
-        return x
-
-    def forward(self, x1, x2):
-        x1 = self.base_forward(x1)
-        x2 = self.base_forward(x2)
-        return [x1, x2]
-
-
-class SCDHead(nn.Module):
-    def __init__(self, in_channel,num_classes=7) -> None:
-        super().__init__()
-        self.classifier1 = nn.Conv2d(in_channel, num_classes, kernel_size=1)
-        
-        self.classifier2 = nn.Conv2d(in_channel, num_classes, kernel_size=1)
-        
-        self.classifierCD = nn.Sequential(nn.Conv2d(in_channel, 64, kernel_size=1), nn.BatchNorm2d(64), nn.ReLU(), nn.Conv2d(64, 1, kernel_size=1))
-    
-    def forward(self, x1, x2, change):
-        change = self.classifierCD(change)
-        x1 = self.classifier1(x1)
-        x2 = self.classifier2(x2)       
-        return x1, x2, change
-
-class Neck(nn.Module):
-    def __init__(self,embed_dim, mid_dim=128) -> None:
-        super().__init__()
-        self.head = nn.Sequential(nn.Conv2d(embed_dim, mid_dim, kernel_size=1, stride=1, padding=0, bias=False),
-                                  nn.BatchNorm2d(mid_dim), nn.ReLU())
-        self.resCD = self._make_layer(ResBlock, mid_dim*2, mid_dim, 3, stride=1)
-        
-        
-    def _make_layer(self, block, inplanes, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or inplanes != planes:
-            downsample = nn.Sequential(
-                conv1x1(inplanes, planes, stride),
-                nn.BatchNorm2d(planes) )
-        
-        layers = []
-        layers.append(block(inplanes, planes, stride, downsample))
-        self.inplanes = planes * block.expansion
-        for _ in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
-            
-        return nn.Sequential(*layers)
-    def base_forward(self, x1, x2):
-        x1 = self.head(x1)
-        x2 = self.head(x2)
-        change = [x1, x2]
-        change = torch.cat(change, 1)
-        change = self.resCD(change)
-        return x1, x2, change
-
-    def forward(self, x1, x2):
-         return self.base_forward(x1, x2)
-  
-
-class SCDDecoder(nn.Module):
-    def __init__(self, num_classes=7, mid_dim=128, x_size=(512,512)) -> None:
-        super().__init__()
-        self.neck = Neck(embed_dim=512, mid_dim=mid_dim)
-        self.head = SCDHead(mid_dim, num_classes)   
-        self.x_size = x_size    
-       
-    def forward(self, x, perturbation = None, o_l = None):     
-        if perturbation is not None:
-            x = torch.cat(x, dim=1)
-            x = perturbation(x, o_l)
-            x1, x2 = torch.chunk(x, dim=1,chunks=2) 
-        else:
-            x1, x2 = x
-        x1, x2, change = self.neck(x1, x2)
-        x1, x2, change = self.head(x1, x2, change)
-        return [F.interpolate(x1, self.x_size, mode='bilinear', align_corners=True), 
-                F.interpolate(x2, self.x_size, mode='bilinear', align_corners=True), 
-                F.interpolate(change, self.x_size, mode='bilinear', align_corners=True)]
-
+import logging
+from .components import *
 class SCDNet(pl.LightningModule):
     def __init__(self,in_channels=3, monitor=None,
                 num_classes=7, mid_dim=128,
                 scheduler_config=None) -> None:
         super().__init__()  
+        self.save_hyperparameters(ignore=['loss_func', 'running_meters', 'scheduler_config'])
         if monitor is not None:
             self.monitor = monitor 
         self.encoder = Encoder(in_channels)
@@ -190,6 +13,7 @@ class SCDNet(pl.LightningModule):
         self.loss_func = SCDLoss()
         self.running_meters = RunningMetrics(num_classes=7)
         self.scheduler_config = scheduler_config
+        
         
     def encode(self, x1, x2):
         return self.encoder(x1, x2)
@@ -225,8 +49,8 @@ class SCDNet(pl.LightningModule):
         x1, x2, change = self(x1, x2)
         target_bn = (target_B>0).float()
         loss = self.loss_func(x1, x2, change, target_bn, target_A, target_B)
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=bs)
-        self.log('train_lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=True, logger=True, batch_size=bs)
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=bs)
+        self.log('train/lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=True, logger=True, batch_size=bs)
         return loss
      
     
@@ -285,9 +109,20 @@ class SCDNet(pl.LightningModule):
         self.log('val/SeK', scores['Sek'], on_epoch=True, logger=True, batch_size=bs)
         
         return preds  
-          
-    def on_validataion_epoch_end(self):
-        
+    
+    def on_fit_start(self) -> None:
+        val_logger = logging.getLogger('val')
+        val_logger.info('\n###### EVALUATION ######')
+    @torch.no_grad()
+    def on_validation_epoch_end(self):
+        # log the validation metrics
+        val_logger = logging.getLogger('val')
+        scores = self.running_meters.get_scores()
+        message  = f'Validation Summary Epoch: [{self.current_epoch}]\n'
+        for k, v in scores.items():
+            message += '{:s}: {:.4e} '.format(k, v) 
+        message += '\n'
+        val_logger.info(message)
         self.running_meters.reset()
         
     @torch.no_grad()
@@ -324,9 +159,12 @@ class SCDNet(pl.LightningModule):
         return preds
     def on_test_end(self) -> None:
         scores = self.running_meters.get_scores()
-        message = 'Test: performance: F_scd: {:.4f}, miou: {:.4f}, OA: {:.4f}, Sek: {:.4f}'.format(
-            scores['F_scd'], scores['Mean_IoU'], scores['OA'], scores['Sek'])
-        print(message)
+        message = '=========Test: performance=========\n'
+        for k, v in scores.items():
+            message += '{:s}: {:.4e} '.format(k, v) 
+        message += '\n'
+        val_logger = logging.getLogger('val')
+        val_logger.info(message)
         self.running_meters.reset()
         
     @torch.no_grad()
@@ -363,10 +201,115 @@ class SCDNet(pl.LightningModule):
         return log
 
         
-class SemiSCDNet(pl.LightningModule):
-    def __init__(self,in_channels=3, monitor=None,
-                num_classes=7, mid_dim=128,
-                scheduler_config=None) -> None:
+class SemiSCDNet(SCDNet):
+    def __init__(self,in_channels=3, monitor=None, num_epochs=0,
+                num_classes=7, mid_dim=128,iters_per_epoch=0,
+                scheduler_config=None, rc_config=None, **kwargs) -> None:
         super().__init__(in_channels=in_channels, monitor=monitor,
                          num_classes=num_classes, mid_dim=mid_dim,
                          scheduler_config=scheduler_config)  
+        self.sup_running_metric = RunningMetrics(num_classes)
+        self.unsup_running_metric = RunningMetrics(num_classes)
+        self.unsuper_loss = softmax_mse_loss
+        self.unsup_loss_w = consistency_weight(final_w=rc_config['unsup_final_w'], iters_per_epoch=iters_per_epoch,
+                                               rampup_ends=int(0.1*num_epochs))
+        
+        # confidence masking 
+        self.confidence_th      = rc_config['confidence_th']
+        self.confidence_masking = rc_config['confidence_masking']
+        
+        self.pertubs = self._make_perturbs(rc_config)
+        
+        
+    def _make_perturbs(self, opt):
+        assert opt is not None, "perturebation config is None"
+        vat     = [VAT(xi=opt['xi'], eps=opt['eps']) for _ in range(opt['vat'])]
+        drop    = [DropOut(drop_rate=opt['drop_rate'], spatial_dropout=opt['spatial'])
+                                    for _ in range(opt['drop'])]
+        cut     = [CutOut(erase=opt['erase']) for _ in range(opt['cutout'])]
+        context_m = [ContextMasking() for _ in range(opt['context_masking'])]
+        object_masking  = [ObjectMasking() for _ in range(opt['object_masking'])]
+        feature_drop    = [FeatureDrop() for _ in range(opt['feature_drop'])]
+        feature_noise   = [FeatureNoise(uniform_range=opt['uniform_range'])
+                                    for _ in range(opt['feature_noise'])]
+        return nn.ModuleList([*vat, *drop, *cut,
+                                *context_m, *object_masking, *feature_drop, *feature_noise])
+        # 半监督学习的step
+    def training_step(self, batch, batch_idx):
+        sup_data, unsup_data = batch
+        # supervise loss
+        x1 = sup_data['image_A']
+        x2 = sup_data['image_B']
+        target_A = sup_data['target_A'].long()
+        target_B = sup_data['target_B'].long()
+        x1, x2, change = self(x1, x2)
+        target_bn = (target_B>0).float()
+        loss_sup = self.loss_func(x1, x2, change, target_bn, target_A, target_B)
+        
+        A_ul, B_ul, target_uA, target_uB, _ = [v for v in unsup_data.values()]
+        bs = A_ul.shape[0]
+        # Get main prediction
+        x_ul      = self.encoder(A_ul, B_ul)
+        output_ul = self.decoder(x_ul)
+        
+        # Get auxiliary predictions
+        outputs_ul = [self.decoder(x_ul, perturbation=pertub, o_l = output_ul[-1].detach()) for pertub in self.pertubs]
+        targets = [F.softmax(o_ul.detach(), dim=1) for o_ul in output_ul]
+        # Compute unsupervised loss
+        loss_unsup = sum([0.5*(self.unsuper_loss(inputs=u[0], targets=targets[0], \
+                        conf_mask=self.confidence_masking, 
+                        threshold=self.confidence_th, 
+                        use_softmax=False)+(self.unsuper_loss(inputs=u[1], targets=targets[1], \
+                        conf_mask=self.confidence_masking, 
+                        threshold=self.confidence_th, 
+                        use_softmax=False)))
+                        for u in outputs_ul])
+        loss_unsup = (loss_unsup / len(outputs_ul))
+        # Compute the unsupervised loss
+        weight_u    = self.unsup_loss_w(self.global_step)
+        loss_unsup  = loss_unsup * weight_u
+        total_loss  = loss_unsup  + loss_sup 
+        
+        # update mertic
+        sup_pred = self.get_prediction((x1, x2, change), domain='sup')
+        unsup_pred = self.get_prediction(output_ul, domain='unsup')
+        del output_ul, x_ul
+        self.sup_running_metric.update(target_A.detach().cpu().numpy(), sup_pred['sup_pred_A'].detach().cpu().numpy())
+        self.sup_running_metric.update(target_B.detach().cpu().numpy(), sup_pred['sup_pred_B'].detach().cpu().numpy())
+        self.unsup_running_metric.update(target_uA.detach().cpu().numpy(), unsup_pred['unsup_pred_A'].detach().cpu().numpy())
+        self.unsup_running_metric.update(target_uB.detach().cpu().numpy(), unsup_pred['unsup_pred_B'].detach().cpu().numpy())
+        
+        # log loss
+        self.log('train/loss_sup', loss_sup, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=bs)
+        self.log('train/lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=True, logger=True, batch_size=bs)
+        self.log('train/loss_unsup', loss_unsup, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=bs)
+        
+        return total_loss
+        
+    def on_train_epoch_end(self) -> None:
+        # log metric for sup/unsup data
+        sup_score = self.sup_running_metric.get_scores()
+        unsup_score = self.unsup_running_metric.get_scores()
+
+        for k, v in sup_score.items():
+            self.log(f'train/sup_{k}', v, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        for k, v in unsup_score.items():
+            self.log(f'train/unsup_{k}', v, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        
+        # logging in file
+        train_logger = logging.getLogger('train')
+        message = '[Training SemiSCD (epoch %d summary)]: Fscd_sup=%.5f,  Fscd_unsup=%.5f \n' %\
+                      (self.current_epoch, sup_score['F_scd'], unsup_score['F_scd'])
+        for k, v in sup_score.items():
+            message += 'sup_{:s}: {:.4e} '.format(k, v) 
+        message += '\n'
+        for k, v in unsup_score.items():
+            message += 'unsup_{:s}: {:.4e} '.format(k, v) 
+        message += '\n'
+        train_logger.info(message)
+        # reset mertric for next epoch
+        self.sup_running_metric.reset()
+        self.unsup_running_metric.reset()
+    
+        
+        
