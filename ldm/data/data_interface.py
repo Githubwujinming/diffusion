@@ -1,6 +1,7 @@
 import torch
 from functools import partial
 from itertools import cycle
+from packaging import version
 import numpy as np
 import pytorch_lightning as pl
 from lightning.pytorch.utilities import CombinedLoader
@@ -104,8 +105,10 @@ class SCDDatasetFromConfig(pl.LightningDataModule):
             unsup_loader = SCDDataLoader(self.datasets["unsup_train"], batch_size=self.unsup_train_size,
                         num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
                         worker_init_fn=init_fn)
-            
-            return CombinedLoader([sup_loader, unsup_loader], mode='max_size_cycle')
+            if version.parse(pl.__version__) >= version.parse('1.9.0'):
+                return CombinedLoader([sup_loader, unsup_loader], mode='max_size_cycle')
+            else:
+                return SequentialLoader(sup_loader, unsup_loader)
         else:
             return sup_loader
 
