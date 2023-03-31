@@ -2,7 +2,12 @@ import datetime
 import json
 import logging
 import os
+def beijing(sec, what):
+    beijing_time = datetime.datetime.now() + datetime.timedelta(hours=8)
+    return beijing_time.timetuple()
 
+
+logging.Formatter.converter = beijing
 logging.basicConfig(level=logging.INFO, format='')
 
 class Logger:
@@ -21,27 +26,15 @@ class Logger:
     def __str__(self):
         return json.dumps(self.entries, sort_keys=True, indent=4)
 
-def beijing(sec, what):
-    beijing_time = datetime.datetime.now() + datetime.timedelta(hours=8)
-    return beijing_time.timetuple()
 
-
-logging.Formatter.converter = beijing
-
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s: %(message)s",
-    level=logging.INFO,
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 
 def setup_logger(logger_name, root, phase, level=logging.INFO, screen=False):
     '''set up logger'''
     l = logging.getLogger(logger_name)
     formatter = logging.Formatter(
         '%(asctime)s.%(msecs)03d - %(levelname)s: %(message)s', datefmt='%y-%m-%d %H:%M:%S')
-    # formatter.converter = beijing
     log_file = os.path.join(root, '{}.log'.format(phase))
-    fh = logging.FileHandler(log_file, mode='w')
+    fh = logging.FileHandler(log_file, mode='w+')
     fh.setFormatter(formatter)
     l.setLevel(level)
     l.addHandler(fh)
