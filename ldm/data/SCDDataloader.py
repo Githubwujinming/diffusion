@@ -79,9 +79,7 @@ class ImageDataset(SCDBaseDataSet):
                                             )
     
     def _set_files(self):
-        if self.split == "val":
-            file_list = os.path.join(self.root, 'list', f"{self.split}" + ".txt")
-        elif self.split == "test":
+        if self.split in ["val","train","test"]:
             file_list = os.path.join(self.root, 'list', f"{self.split}" + ".txt")
         elif self.split in ["train_supervised", "train_unsupervised"]:
             file_list = os.path.join(self.root, 'list', f"{self.percnt_lbl}_{self.split}" + ".txt")
