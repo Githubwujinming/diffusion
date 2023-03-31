@@ -424,8 +424,8 @@ if __name__ == "__main__":
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
         # 如果没有指定gpu，则使用cpu noet: pl设置gpu的api已经改变了
-        # if not 'gpus' in trainer_config:
-            del trainer_config["accelerator"]
+        if not 'gpus' in trainer_config:
+            # del trainer_config["accelerator"]
             cpu = True
         else:
             # 如果指定了gpu，则使用gpu
@@ -512,8 +512,9 @@ if __name__ == "__main__":
         }
         if hasattr(model, "monitor"): # 最好模型依据的指标
             print(f"Monitoring {model.monitor} as checkpoint metric.")
+            default_modelckpt_cfg["params"]["mode"] = 'max'
             default_modelckpt_cfg["params"]["monitor"] = model.monitor
-            default_modelckpt_cfg["params"]["save_top_k"] = 3# 保存最好的3个模型
+            default_modelckpt_cfg["params"]["save_top_k"] = 5# 保存最好的3个模型
 
         if "modelcheckpoint" in lightning_config:
             modelckpt_cfg = lightning_config.modelcheckpoint
@@ -578,7 +579,7 @@ if __name__ == "__main__":
                          "verbose": True,
                          "mode": 'max',
                          'save_top_k': -1,
-                         'every_n_train_steps': 10000,
+                         'every_n_train_steps': 1000,
                          'save_weights_only': True
                      }
                      }
