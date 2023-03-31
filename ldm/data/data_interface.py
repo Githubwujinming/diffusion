@@ -1,8 +1,9 @@
+import torch
 from functools import partial
 from itertools import cycle
 import numpy as np
 import pytorch_lightning as pl
-import torch
+from lightning.pytorch.utilities import CombinedLoader
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
 from torch.utils.data import random_split, DataLoader, Dataset, Subset
@@ -36,15 +37,16 @@ class WrappedDataset(Dataset):
         return self.data[idx]
 # 用于将多个dataloader组合成一个dataloader
 class SequentialLoader:
-    def __init__(self, *dataloaders: DataLoader):
-        self.dataloaders = dataloaders
-
+    def __init__(self, sup_data_loader, unsup_data_loader):
+        self.sup_data_loader = sup_data_loader
+        self.unsup_data_loader = unsup_data_loader
+        self.len = max(len(sup_data_loader), len(unsup_data_loader))
     def __len__(self):
-        return max(len(d) for d in self.dataloaders)
+        return self.len
 
     def __iter__(self):
-        for dataloader in self.dataloaders:
-            yield from dataloader
+        for sup_data, unsup_data in zip(cycle(self.sup_data_loader), self.unsup_data_loader):
+            yield sup_data, unsup_data
             
 class SCDDatasetFromConfig(pl.LightningDataModule):
     def __init__(self, train_supervised=None, train_unsupervised=None, validation=None, test=None, predict=None,
@@ -102,7 +104,8 @@ class SCDDatasetFromConfig(pl.LightningDataModule):
             unsup_loader = SCDDataLoader(self.datasets["unsup_train"], batch_size=self.unsup_train_size,
                         num_workers=self.num_workers, shuffle=False if is_iterable_dataset else True,
                         worker_init_fn=init_fn)
-            return SequentialLoader(cycle(sup_loader), unsup_loader)
+            
+            return CombinedLoader([sup_loader, unsup_loader], mode='max_size_cycle')
         else:
             return sup_loader
 
