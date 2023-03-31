@@ -11,6 +11,7 @@ class SCDNet(pl.LightningModule):
         self.encoder = Encoder(in_channels)
         self.decoder = SCDDecoder(num_classes=num_classes, mid_dim=mid_dim)
         self.loss_func = SCDLoss()
+        self.train_running_meters = RunningMetrics(num_classes=7)
         self.running_meters = RunningMetrics(num_classes=7)
         self.scheduler_config = scheduler_config
         
@@ -51,8 +52,29 @@ class SCDNet(pl.LightningModule):
         loss = self.loss_func(x1, x2, change, target_bn, target_A, target_B)
         self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=bs)
         self.log('train/lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=True, logger=True, batch_size=bs)
+        
+        sup_pred = self.get_prediction((x1, x2, change), domain='sup')
+        self.train_running_meters.update(target_A.detach().cpu().numpy(), sup_pred['sup_pred_A'].detach().cpu().numpy())
+        self.train_running_meters.update(target_B.detach().cpu().numpy(), sup_pred['sup_pred_B'].detach().cpu().numpy())
         return loss
-     
+    
+    def on_train_epoch_end(self) -> None:
+        # log metric for sup/unsup data
+        sup_score = self.train_running_meters.get_scores()
+
+        for k, v in sup_score.items():
+            self.log(f'train/sup_{k}', v, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        
+        # logging in file
+        train_logger = logging.getLogger('train')
+        message = '[Training SCD (epoch %d summary)]: Fscd=%.5f \n' %\
+                      (self.current_epoch, sup_score['F_scd'])
+        for k, v in sup_score.items():
+            message += '{:s}: {:.4e} '.format(k, v) 
+        message += '\n'
+        train_logger.info(message)
+        # reset mertric for next epoch
+        self.running_meters.reset()
     
     # 这里配置优化器
     def configure_optimizers(self):
@@ -112,6 +134,7 @@ class SCDNet(pl.LightningModule):
     
     def on_fit_start(self) -> None:
         val_logger = logging.getLogger('val')
+        self.running_meters.reset()
         val_logger.info('\n###### EVALUATION ######')
     @torch.no_grad()
     def on_validation_epoch_end(self):
