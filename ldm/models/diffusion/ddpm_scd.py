@@ -1,3 +1,6 @@
+import logging
+import os
+import PIL
 import torch
 import torch.nn as nn
 import numpy as np
@@ -9,6 +12,7 @@ from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
+from ldm.data.SCDDataloader import Index2Color
 
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from ldm.modules.ema import LitEma
@@ -17,6 +21,7 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.ddpm import DDPM, LatentDiffusion
+from utils.scdloss import SCDLoss
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -30,7 +35,7 @@ class LatentDiffusionSCD(LatentDiffusion):
         super().__init__(*args, **kwargs)
         # first_stage_key ['image_A','image_B']
         # TODO: 参数尺寸需要检查
-        self.learnable_cond = torch.nn.Parameter(torch.randn(1, 128, 32, 32), requires_grad=True)
+        self.learnable_cond = torch.nn.Parameter(torch.randn(1, 128, 16, 16), requires_grad=True)
         
     @rank_zero_only
     @torch.no_grad()
@@ -284,3 +289,113 @@ class LatentDiffusionSCD(LatentDiffusion):
                 return self.first_stage_model.encode(x1, x2)
         else:
             return self.first_stage_model.encode(x1, x2)
+        
+        
+
+class LatentDiffusionSCD2(LatentDiffusion):
+    '''
+    first_stage_key: ['image_A','image_B']
+    '''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # first_stage_key ['image_A','image_B']
+        # TODO: 参数尺寸需要检查
+        self.learnable_cond = torch.nn.Parameter(torch.randn(1, 128, 16, 16), requires_grad=True)
+        
+    @rank_zero_only
+    @torch.no_grad()
+    def on_train_batch_start(self, batch, batch_idx):
+        # only for very first batch 每个epoch的第一个batch的处理函数
+        if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
+            # assert self.scale_factor == 1., 'rather not use custom rescaling and std-rescaling simultaneously'
+            # # set rescale weight to 1./std of encodings
+            # print("### USING STD-RESCALING ###")
+            # z1, _ = self.get_input(batch, self.first_stage_key)
+            # encoder_posterior1 = torch.cat(z, dim=1)
+            # z2, _ = self.get_input(batch, self.first_stage_key)
+            # encoder_posterior2 = torch.cat(z, dim=1)
+            # z1 = self.get_first_stage_encoding(encoder_posterior1).detach()
+            # z2 = self.get_first_stage_encoding(encoder_posterior2).detach()
+            # z = torch.cat(z, 1)
+            # del self.scale_factor
+            # self.register_buffer('scale_factor', 1. / z.flatten().std())
+            # print(f"setting self.scale_factor to {self.scale_factor}")
+            print("### USING STD-RESCALING ###")
+            
+    # 解码器对去噪网络预测的特征解码，生成新图片，samples为扩散模型采样的数据
+    def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
+        denoise_row = []
+        # for zd in tqdm(samples, desc=desc):
+        #     denoise_row.append(self.decode_first_stage(zd.to(self.device),
+        #                                                     force_not_quantize=force_no_decoder_quantization))
+        # n_imgs_per_row = len(denoise_row)
+        # denoise_row = torch.stack(denoise_row)  # n_log_step, n_row, C, H, W
+        # denoise_grid = rearrange(denoise_row, 'n b c h w -> b n c h w')
+        # denoise_grid = rearrange(denoise_grid, 'b n c h w -> (b n) c h w')
+        # denoise_grid = make_grid(denoise_grid, nrow=n_imgs_per_row)
+        # return denoise_grid
+        raise NotImplementedError
+    
+    '''
+    从数据中返回编码后的输入和条件（提示词，位置编码等）
+    '''
+    @torch.no_grad()
+    def get_input(self, batch, ks, return_first_stage_outputs=False, force_c_encode=False,
+                  cond_key=None, return_original_cond=False, bs=None):
+        def get_input(batch, k):
+            x = batch[k]
+            if len(x.shape) == 3:
+                x = x[..., None]
+            x = x.to(memory_format=torch.contiguous_format).float()
+            return x
+        x1 = get_input(batch, ks[0])# 根据key获取输入，batch是一个字典
+        x2 = get_input(batch, ks[1])
+        if bs is not None:
+            x1, x2 = x1[:bs], x2[:bs]
+        # x1 = x1.to(self.device)
+        # x2 = x2.to(self.device)
+        # 对输入（图像）编码, z为编码后的结果
+        encoder_posterior1 = self.encode_first_stage(x1)
+        encoder_posterior2 = self.encode_first_stage(x1)
+        
+        z1 = self.get_first_stage_encoding(encoder_posterior1).detach()
+        z2 = self.get_first_stage_encoding(encoder_posterior2).detach()
+        z = torch.cat([z1, z2], 1)
+        # 从数据中获取条件，这个应该是和图像文本对的数据相关的，自定义的数据可以修改这里
+        if self.model.conditioning_key is not None:
+            if cond_key is None:
+                cond_key = self.cond_stage_key
+            if cond_key in ['diff', 'diff_abs']:
+                xc = torch.abs(x1, x2)# 使用差分图像作为条件
+            else:
+                xc = self.learnable_cond
+            # 如果条件编码器不可训练，或者强制编码，就设置为编码后的结果，否则输入条件数据
+            if not self.cond_stage_trainable or force_c_encode:
+                if isinstance(xc, dict) or isinstance(xc, list):
+                    # import pudb; pudb.set_trace()
+                    c = self.get_learned_conditioning(xc)
+                else:
+                    c = self.get_learned_conditioning(xc.to(self.device))
+            else:
+                c = xc
+            if bs is not None:
+                c = c[:bs]
+
+            # if self.use_positional_encodings:
+            #     pos_x, pos_y = self.compute_latent_shifts(batch)
+            #     ckey = __conditioning_keys__[self.model.conditioning_key]
+            #     c = {ckey: c, 'pos_x': pos_x, 'pos_y': pos_y}
+
+        else:
+            # 如果是无条件生成，c可以为位置编码或者空
+            c = None
+            xc = None
+            # # 如果使用位置编码，计算位置编码
+            # if self.use_positional_encodings:
+            #     pos_x, pos_y = self.compute_latent_shifts(batch)
+            #     c = {'pos_x': pos_x, 'pos_y': pos_y}
+        out = [z, c]# z是隐变量，c是条件编码
+        return out# 
+    # 与encoder_first_stage流程一致，对编码后的隐变量解码。
+
+        

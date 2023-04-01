@@ -16,12 +16,16 @@ class LitEma(nn.Module):
         for name, p in model.named_parameters():
             if p.requires_grad:
                 #remove as '.'-character is not allowed in buffers
+                # 将点号'.'去除，因为buffer不允许
                 s_name = name.replace('.','')
+                # 点号去除后，需要一个字典表保存映射关系
                 self.m_name2s_name.update({name:s_name})
+                # 将model的参数保存到ema模型中
                 self.register_buffer(s_name,p.clone().detach().data)
-
+        # 用于暂存可学习model的参数
         self.collected_params = []
 
+    # 动量更新
     def forward(self,model):
         decay = self.decay
 
@@ -37,12 +41,16 @@ class LitEma(nn.Module):
 
             for key in m_param:
                 if m_param[key].requires_grad:
+                    # 查找ema模型中对应的参数名
                     sname = self.m_name2s_name[key]
+                    # 取出对应参数
                     shadow_params[sname] = shadow_params[sname].type_as(m_param[key])
+                    # 更新ema[t] = ema[t-1] - (1-a)(ema[t-1]-m[t])=ema[t-1]-ema[t-1]+a*ema[t-1]+(1-a)*m[t]
+                    # = a*ema[t-1]+(1-a)*m[t]
                     shadow_params[sname].sub_(one_minus_decay * (shadow_params[sname] - m_param[key]))
                 else:
                     assert not key in self.m_name2s_name
-
+    # 将model的参数暂时复制到ema模型中
     def copy_to(self, model):
         m_param = dict(model.named_parameters())
         shadow_params = dict(self.named_buffers())
@@ -51,7 +59,7 @@ class LitEma(nn.Module):
                 m_param[key].data.copy_(shadow_params[self.m_name2s_name[key]].data)
             else:
                 assert not key in self.m_name2s_name
-
+    # 将model的参数暂时至collected_params中
     def store(self, parameters):
         """
         Save the current parameters for restoring later.
@@ -60,7 +68,7 @@ class LitEma(nn.Module):
             temporarily stored.
         """
         self.collected_params = [param.clone() for param in parameters]
-
+    # store 的逆过程
     def restore(self, parameters):
         """
         Restore the parameters stored with the `store` method.

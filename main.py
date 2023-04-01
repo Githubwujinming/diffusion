@@ -59,7 +59,9 @@ def get_parser(**parser_kwargs):
         metavar="base_config.yaml",
         help="paths to base configs. Loaded from left-to-right. "
              "Parameters can be overwritten or added with command-line options of the form `--key value`.",
-        default=['configs/models/test.yaml'],
+        default=['configs/models/ldm_clip.yaml', 
+                 'configs/data/sup_data_10.yaml', 
+                 'configs/lightning/pl_setting_gpu0.yaml'],
     )
     parser.add_argument(
         "-t",
@@ -81,6 +83,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument(
         "-p",
         "--project",# project of wandb
+        type=str,
         help="name of new or path to existing project"
     )
     parser.add_argument(
@@ -120,6 +123,13 @@ def get_parser(**parser_kwargs):
         const=True,
         default=False,
         help="scale base-lr by ngpu * batch_size * n_accumulate",
+    )
+    parser.add_argument(
+        "-g"
+        "--logger_util",
+        type=str,
+        default="tensorboard",
+        help="logger for exp",
     )
     return parser
 
@@ -486,7 +496,7 @@ if __name__ == "__main__":
         }
         # testtube 是pl内的日志工具, testtube在后面的版本取消了
         # 使用的是testtube日志，如果用wandb日志，则将default_logger_cfgs["testtube"]改为default_logger_cfgs["wandb"]
-        default_logger_cfg = default_logger_cfgs["wandb"]
+        default_logger_cfg = default_logger_cfgs[opt.g__logger_util]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:

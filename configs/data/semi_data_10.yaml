@@ -5,7 +5,7 @@ data:
     num_workers: 4
     wrap: false
     sup_train_size: 4
-    unsup_train_size: 8
+    unsup_train_size: 12
     val_size: 8
     test_size: 1
     train_supervised:

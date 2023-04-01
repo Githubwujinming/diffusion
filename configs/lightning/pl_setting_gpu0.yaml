@@ -9,5 +9,6 @@ lightning:
   modelcheckpoint:
     target: pytorch_lightning.callbacks.ModelCheckpoint
     params: 
-      mode: max
-  
+      mode: "max"
+      auto_insert_metric_name: True
+      filename: "{epoch:03}-Fscd={val\\F_scd:.4f}"

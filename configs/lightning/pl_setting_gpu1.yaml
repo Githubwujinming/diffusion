@@ -10,4 +10,5 @@ lightning:
     target: pytorch_lightning.callbacks.ModelCheckpoint
     params: 
       mode: max
+      filename: "{epoch:03}-Fscd={val-F_scd:.4f}"
   

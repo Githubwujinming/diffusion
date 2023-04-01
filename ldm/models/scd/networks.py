@@ -1,4 +1,7 @@
+from contextlib import contextmanager
 import logging
+
+from ldm.modules.ema import LitEma
 from .components import *
 class SCDNet(pl.LightningModule):
     def __init__(self,in_channels=3, monitor=None,
@@ -126,7 +129,7 @@ class SCDNet(pl.LightningModule):
         self.running_meters.update(target_A.detach().cpu().numpy(), preds['val_pred_A'].detach().cpu().numpy())
         self.running_meters.update(target_B.detach().cpu().numpy(), preds['val_pred_B'].detach().cpu().numpy())
         scores = self.running_meters.get_scores()
-        self.log('val/F_scd', scores['F_scd'], on_epoch=True,  logger=True, batch_size=bs)
+        self.log('val-F_scd', scores['F_scd'], on_epoch=True,  logger=True, batch_size=bs)
         self.log('val/miou', scores['Mean_IoU'], on_epoch=True, logger=True, batch_size=bs)
         self.log('val/OA', scores['OA'], on_epoch=True,  logger=True, batch_size=bs)
         self.log('val/SeK', scores['Sek'], on_epoch=True, logger=True, batch_size=bs)
@@ -335,5 +338,85 @@ class SemiSCDNet(SCDNet):
         self.sup_running_metric.reset()
         self.unsup_running_metric.reset()
     
+class SemiMTSCD(SemiSCDNet):
+    def __init__(self, use_ema=False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_ema = use_ema
+        if self.use_ema:
+            self.decoder_ema = LitEma(self.decoder)
+            print(f"Keeping EMAs of {len(list(self.decoder_ema.buffers()))}.")
+    
+    
+    @contextmanager
+    def ema_scope(self, context=None):
+        if self.use_ema:
+            self.decoder_ema.store(self.decoder.parameters())
+            self.decoder_ema.copy_to(self.decoder)
+            if context is not None:
+                print(f"{context}: Switched to EMA weights")
+        try:
+            yield None
+        finally:
+            if self.use_ema:
+                self.decoder_ema.restore(self.decoder.parameters())
+                if context is not None:
+                    print(f"{context}: Restored training weights")
+                    
+    def on_train_batch_end(self, *args, **kwargs):
+        super().on_train_batch_end(*args, **kwargs)
+        if self.use_ema:
+            self.decoder_ema(self.decoder)
+            
+            
+        # 半监督学习的step
+    def training_step(self, batch, batch_idx):
+        sup_data, unsup_data = batch
+        # supervise loss
+        x1 = sup_data['image_A']
+        x2 = sup_data['image_B']
+        target_A = sup_data['target_A'].long()
+        target_B = sup_data['target_B'].long()
+        x1, x2, change = self(x1, x2)
+        target_bn = (target_B>0).float()
+        loss_sup = self.loss_func(x1, x2, change, target_bn, target_A, target_B)
         
+        A_ul, B_ul, target_uA, target_uB, _ = [v for v in unsup_data.values()]
+        bs = A_ul.shape[0]
+        # Get main prediction
+        x_ul = self.encoder(A_ul, B_ul)
+        with self.ema_scope():
+            output_ul = self.decoder(x_ul)
         
+        # Get auxiliary predictions
+        outputs_ul = [self.decoder(x_ul, perturbation=pertub, o_l = output_ul[-1].detach()) for pertub in self.pertubs]
+        targets = [F.softmax(o_ul.detach(), dim=1) for o_ul in output_ul]
+        # Compute unsupervised loss
+        loss_unsup = sum([0.5*(self.unsuper_loss(inputs=u[0], targets=targets[0], \
+                        conf_mask=self.confidence_masking, 
+                        threshold=self.confidence_th, 
+                        use_softmax=False)+(self.unsuper_loss(inputs=u[1], targets=targets[1], \
+                        conf_mask=self.confidence_masking, 
+                        threshold=self.confidence_th, 
+                        use_softmax=False)))
+                        for u in outputs_ul])
+        loss_unsup = (loss_unsup / len(outputs_ul))
+        # Compute the unsupervised loss
+        weight_u    = self.unsup_loss_w(self.global_step)
+        loss_unsup  = loss_unsup * weight_u
+        total_loss  = loss_unsup  + loss_sup 
+        
+        # update mertic
+        sup_pred = self.get_prediction((x1, x2, change), domain='sup')
+        unsup_pred = self.get_prediction(output_ul, domain='unsup')
+        del output_ul, x_ul
+        self.sup_running_metric.update(target_A.detach().cpu().numpy(), sup_pred['sup_pred_A'].detach().cpu().numpy())
+        self.sup_running_metric.update(target_B.detach().cpu().numpy(), sup_pred['sup_pred_B'].detach().cpu().numpy())
+        self.unsup_running_metric.update(target_uA.detach().cpu().numpy(), unsup_pred['unsup_pred_A'].detach().cpu().numpy())
+        self.unsup_running_metric.update(target_uB.detach().cpu().numpy(), unsup_pred['unsup_pred_B'].detach().cpu().numpy())
+        
+        # log loss
+        self.log('train/loss_sup', loss_sup, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=bs)
+        self.log('train/lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=True, logger=True, batch_size=bs)
+        self.log('train/loss_unsup', loss_unsup, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=bs)
+        
+        return total_loss
