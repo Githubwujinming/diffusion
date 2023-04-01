@@ -3,7 +3,7 @@ from .components import *
 class SCDNet(pl.LightningModule):
     def __init__(self,in_channels=3, monitor=None,
                 num_classes=7, mid_dim=128,
-                scheduler_config=None) -> None:
+                scheduler_config=None, ckpt_path=None) -> None:
         super().__init__()  
         self.save_hyperparameters(ignore=['loss_func', 'running_meters', 'scheduler_config'])
         if monitor is not None:
@@ -14,7 +14,8 @@ class SCDNet(pl.LightningModule):
         self.train_running_meters = RunningMetrics(num_classes=7)
         self.running_meters = RunningMetrics(num_classes=7)
         self.scheduler_config = scheduler_config
-        
+        if ckpt_path is not None:
+            self.init_from_ckpt(ckpt_path)
         
     def encode(self, x1, x2):
         return self.encoder(x1, x2)
