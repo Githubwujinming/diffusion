@@ -129,7 +129,7 @@ class SCDNet(pl.LightningModule):
         self.running_meters.update(target_A.detach().cpu().numpy(), preds['val_pred_A'].detach().cpu().numpy())
         self.running_meters.update(target_B.detach().cpu().numpy(), preds['val_pred_B'].detach().cpu().numpy())
         scores = self.running_meters.get_scores()
-        self.log('val-F_scd', scores['F_scd'], on_epoch=True,  logger=True, batch_size=bs)
+        self.log('val/F_scd', scores['F_scd'], on_epoch=True,  logger=True, batch_size=bs)
         self.log('val/miou', scores['Mean_IoU'], on_epoch=True, logger=True, batch_size=bs)
         self.log('val/OA', scores['OA'], on_epoch=True,  logger=True, batch_size=bs)
         self.log('val/SeK', scores['Sek'], on_epoch=True, logger=True, batch_size=bs)
