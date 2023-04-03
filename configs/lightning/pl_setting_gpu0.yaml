@@ -11,4 +11,4 @@ lightning:
     params: 
       mode: "max"
       auto_insert_metric_name: False
-      filename: "Epoch={epoch:03}-Fscd={val/F_scd:.4f}"
+      filename: "Epoch={epoch:03}-{val/F_scd:.4f}"
