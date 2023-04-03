@@ -161,9 +161,9 @@ class Neck(nn.Module):
   
 
 class SCDDecoder(nn.Module):
-    def __init__(self, num_classes=7, mid_dim=128, x_size=(512,512)) -> None:
+    def __init__(self, num_classes=7, mid_dim=128, embed_dim=1024, x_size=(512,512)) -> None:
         super().__init__()
-        self.neck = Neck(embed_dim=512, mid_dim=mid_dim)
+        self.neck = Neck(embed_dim=embed_dim, mid_dim=mid_dim)
         self.head = SCDHead(mid_dim, num_classes)   
         self.x_size = x_size    
        

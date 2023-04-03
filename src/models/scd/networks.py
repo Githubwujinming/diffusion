@@ -6,7 +6,7 @@ from utils.metrics import weighted_BCE_logits
 from .components import *
 class SCDNet(pl.LightningModule):
     def __init__(self,in_channels=3, monitor=None,
-                num_classes=7, mid_dim=128, ex_cr=True,
+                num_classes=7, mid_dim=128,
                 scheduler_config=None, ckpt_path=None) -> None:
         super().__init__()  
         self.save_hyperparameters(ignore=['loss_func', 'running_meters', 'scheduler_config'])
@@ -15,10 +15,9 @@ class SCDNet(pl.LightningModule):
         self.encoder = Encoder(in_channels)
         self.decoder = SCDDecoder(num_classes=num_classes, mid_dim=mid_dim)
         self.loss_func = SCDLoss()
-        self.train_running_meters = RunningMetrics(num_classes=7)
-        self.running_meters = RunningMetrics(num_classes=7)
+        self.train_running_meters = RunningMetrics(num_classes=num_classes)
+        self.running_meters = RunningMetrics(num_classes=num_classes)
         self.scheduler_config = scheduler_config
-        self.ex_cr = ex_cr
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path)
         
@@ -46,12 +45,7 @@ class SCDNet(pl.LightningModule):
             print(f"Missing Keys: {missing}")
             print(f"Unexpected Keys: {unexpected}")
 
-    def exchange(self, x1, x2, change):
-        mask = change.bool().unsqueeze(1).repeat(1, x1.shape[1], 1, 1)
-        tmp = x1.clone()
-        x1[mask] = x2[mask]
-        x2[mask] = tmp[mask]
-        return x1, x2
+
     # 这里写反向传播过程
     def training_step(self, batch):
         x1 = batch['image_A'].clone()
@@ -61,16 +55,8 @@ class SCDNet(pl.LightningModule):
         target_B = batch['target_B'].long()
         x1, x2, change = self(x1, x2)
         target_bn = (target_B>0)
-        loss1 = self.loss_func(x1, x2, change, target_bn.float(), target_A, target_B)
+        loss = self.loss_func(x1, x2, change, target_bn.float(), target_A, target_B)
         
-        loss2 = 0
-        # exchange changed areas and recompute loss
-        if self.ex_cr:
-            x1_, x2_ = self.exchange(batch['image_A'].clone(), batch['image_B'].clone(), target_bn)
-            x1_, x2_, change_ = self(x1_, x2_)
-            loss2 = self.loss_func(x1_, x2_, change_, target_bn.float(), target_A, target_B)
-        
-        loss = loss1 + 0.1 * loss2
         self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, batch_size=bs)
         self.log('train/lr', self.trainer.optimizers[0].param_groups[0]['lr'], on_step=True, on_epoch=True, logger=True, batch_size=bs)
         
