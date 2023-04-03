@@ -197,6 +197,7 @@ class SCDNet(pl.LightningModule):
         message += '\n'
         val_logger = logging.getLogger('val')
         val_logger.info(message)
+        self.log('test/F_scd', scores['F_scd'])
         self.running_meters.reset()
         
     @torch.no_grad()
