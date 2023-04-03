@@ -251,9 +251,9 @@ class SCDDiffNet(pl.LightningModule):
         return log
 
 class SemiSCDDiff(SCDDiffNet):
-    def __init_(self, use_ema=False, rc_config=None, 
+    def __init__(self, use_ema=False, rc_config=None, 
                 num_epochs=0, iters_per_epoch=0,
-                *args, **kwargs):
+                *args, **kwargs)->None:
         super().__init__(*args, **kwargs)
         assert rc_config is not None
         num_classes = kwargs['num_classes']
@@ -325,7 +325,7 @@ class SemiSCDDiff(SCDDiffNet):
         A_ul, B_ul, target_uA, target_uB, _ = [v for v in unsup_data.values()]
         bs = A_ul.shape[0]
         # Get main prediction
-        x_ul = self.encoder(A_ul, B_ul)
+        x_ul = self.encode(A_ul, B_ul)
         with self.ema_scope():
             output_ul = self.decoder(x_ul)
         
