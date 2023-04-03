@@ -18,8 +18,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateM
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 from pytorch_lightning.utilities import rank_zero_info
 
-from ldm.data.base import Txt2ImgIterableBaseDataset
-from ldm.util import instantiate_from_config
+from src.data.base import Txt2ImgIterableBaseDataset
+from src.util import instantiate_from_config
 
 
 def get_parser(**parser_kwargs):
@@ -351,7 +351,7 @@ class CUDACallback(Callback):
             pass
 
 import pytz
-if __name__ == "__main__":
+def main():
     now = datetime.datetime.now(pytz.timezone('Asia/Shanghai')).strftime('%m-%d_%H-%M')
 
     # add cwd for convenience and to make classes in this file available when
@@ -550,14 +550,6 @@ if __name__ == "__main__":
                     "lightning_config": lightning_config,
                 }
             },
-            # "image_logger": {
-            #     "target": "main.ImageLogger",
-            #     "params": {
-            #         "batch_frequency": 50,# 每隔多少个batch记录一次图片
-            #         "max_images": 4,
-            #         "clamp": True
-            #     }
-            # },
             "learning_rate_logger": {
                 "target": "main.LearningRateMonitor",
                 "params": {
@@ -664,7 +656,12 @@ if __name__ == "__main__":
                 # 如果出现异常，保存模型
                 melk()
                 raise
-        # 测试模型
+        else:
+            # 指定某个模型进行测试
+            if opt.resume:
+                opt.no_test = True
+                trainer.test(model, data, ckpt_path=ckpt)
+        # 使用monitor指标最好的测试
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data, ckpt_path='best')
     except Exception:
@@ -683,7 +680,10 @@ if __name__ == "__main__":
             os.makedirs(os.path.split(dst)[0], exist_ok=True)
             os.rename(logdir, dst)
         if trainer.global_rank == 0:
-            print(trainer.profiler.summary())
+            train_logger.info(trainer.profiler.summary())
+
+if __name__ == "__main__":
+    main()
 '''
     main.py 就是读取参数，根据参数实例化model, data, trainer对象
     然后调用train.py中的train函数，

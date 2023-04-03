@@ -5,10 +5,10 @@ from packaging import version
 import numpy as np
 import pytorch_lightning as pl
 from lightning.pytorch.utilities import CombinedLoader
-from ldm.data.base import Txt2ImgIterableBaseDataset
-from ldm.util import instantiate_from_config
+from src.data.base import Txt2ImgIterableBaseDataset
+from src.util import instantiate_from_config
 from torch.utils.data import random_split, DataLoader, Dataset, Subset
-from ldm.data.SCDDataloader import SCDDataLoader
+from src.data.SCDDataloader import SCDDataLoader
 def worker_init_fn(_):
     worker_info = torch.utils.data.get_worker_info()
 
