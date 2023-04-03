@@ -13,7 +13,7 @@ class SCDNet(pl.LightningModule):
         if monitor is not None:
             self.monitor = monitor 
         self.encoder = Encoder(in_channels)
-        self.decoder = SCDDecoder(num_classes=num_classes, mid_dim=mid_dim)
+        self.decoder = SCDDecoder(embed_dim=512, num_classes=num_classes, mid_dim=mid_dim)
         self.loss_func = SCDLoss()
         self.train_running_meters = RunningMetrics(num_classes=num_classes)
         self.running_meters = RunningMetrics(num_classes=num_classes)
