@@ -1,6 +1,6 @@
    
 data:
-  target: ldm.data.SCDDatasetFromConfig
+  target: src.data.SCDDatasetFromConfig
   params:
     num_workers: 4
     wrap: false
@@ -9,7 +9,7 @@ data:
     val_size: 8
     test_size: 1
     train_supervised:
-      target: ldm.data.SCDDataloader.ImageDataset
+      target: src.data.SCDDataloader.ImageDataset
       params: 
         data_dir: "/data/datasets/SECOND_scd/"
         crop_size: 512
@@ -22,7 +22,7 @@ data:
         percnt_lbl: 10
         data_len: -1
     train_unsupervised:
-      target: ldm.data.SCDDataloader.ImageDataset
+      target: src.data.SCDDataloader.ImageDataset
       params:
         data_dir: "/data/datasets/SECOND_scd/"
         crop_size: 512
@@ -36,13 +36,13 @@ data:
         percnt_lbl: 10
         data_len: -1
     validation:
-      target: ldm.data.SCDDataloader.ImageDataset
+      target: src.data.SCDDataloader.ImageDataset
       params: 
         data_dir: "/data/datasets/SECOND_scd/"
         split: "val"
         data_len: -1
     test:
-      target: ldm.data.SCDDataloader.ImageDataset
+      target: src.data.SCDDataloader.ImageDataset
       params: 
         data_dir: "/data/datasets/SECOND_scd/"
         split: "test"

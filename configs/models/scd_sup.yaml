@@ -1,13 +1,13 @@
 model:
   base_learning_rate: 1e-2
-  target: ldm.models.scd.networks.SCDNet
+  target: src.models.scd.networks.SCDNet
   params: 
     monitor: "val/F_scd"
     in_channels: 3
     num_classes: 7
     mid_dim: 128
     scheduler_config: # 10000 warmup steps
-      target: ldm.lr_scheduler.LambdaLinearScheduler
+      target: src.lr_scheduler.LambdaLinearScheduler
       params:
         warm_up_steps: [100]
         cycle_lengths: [20000]

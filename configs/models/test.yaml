@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 2.0e-06
-  target: ldm.models.diffusion.ddpm_scd.LatentDiffusionSCD
+  target: src.models.diffusion.ddpm_scd.LatentDiffusionSCD
   params:
     linear_start: 0.0015
     linear_end: 0.0195
@@ -13,7 +13,7 @@ model:
     monitor: val/loss
 
     unet_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      target: src.modules.diffusionmodules.openaimodel.UNetModel
       params:
         image_size: 16
         in_channels: 1024 
@@ -33,7 +33,7 @@ model:
         - 4
         num_head_channels: 32
     first_stage_config:
-      target: ldm.models.scd.networks.SCDNet
+      target: src.models.scd.networks.SCDNet
       params:
         in_channels: 3
         num_classes: 7
@@ -43,7 +43,7 @@ model:
 
    
 data:
-  target: ldm.data.SCDDatasetFromConfig
+  target: src.data.SCDDatasetFromConfig
   params:
     num_workers: 4
     wrap: false
@@ -52,7 +52,7 @@ data:
     val_size: 8
     test_size: 1
     train_supervised:
-      target: ldm.data.SCDDataloader.ImageDataset
+      target: src.data.SCDDataloader.ImageDataset
       params: 
         data_dir: "/data/datasets/SECOND_scd/"
         crop_size: 512
@@ -65,13 +65,13 @@ data:
         percnt_lbl: 10
         data_len: -1
     validation:
-      target: ldm.data.SCDDataloader.ImageDataset
+      target: src.data.SCDDataloader.ImageDataset
       params: 
         data_dir: "/data/datasets/SECOND_scd/"
         split: "val"
         data_len: -1
     test:
-      target: ldm.data.SCDDataloader.ImageDataset
+      target: src.data.SCDDataloader.ImageDataset
       params: 
         data_dir: "/data/datasets/SECOND_scd/"
         split: "test"
