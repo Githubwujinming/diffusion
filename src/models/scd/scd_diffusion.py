@@ -14,7 +14,6 @@ class SCDDiffNet(pl.LightningModule):
         if monitor is not None:
             self.monitor = monitor 
         assert diffusion_config is not None
-        self.encoder = instantiate_from_config(diffusion_config)
         self.decoder = SCDDecoder(embed_dim=embed_dim,num_classes=num_classes, mid_dim=mid_dim)
         self.loss_func = SCDLoss()
         self.train_running_meters = RunningMetrics(num_classes=num_classes)
@@ -22,20 +21,25 @@ class SCDDiffNet(pl.LightningModule):
         self.scheduler_config = scheduler_config
         self.timesteps = timesteps
         self.beta_schedule = beta_schedule
+        if ckpt_path is not None:
+            self.init_from_ckpt(ckpt_path)
+        self.init_denoise_from_ckpt(denoise_path, diffusion_config)
+        
+    
+    def init_denoise_from_ckpt(self, path=None, diffusion_config=None):
+        assert diffusion_config is not None
+        self.encoder = instantiate_from_config(diffusion_config)
+        self.encoder.set_new_noise_schedule(self.beta_schedule, self.device)
+
+        if path is not None:
+            self.encoder.load_state_dict(torch.load(
+                path), strict=False)    
         # disable training of diffusion encoder
-        for param in self.encoder.parameters():
-            param.requires_grad = False
         self.encoder.eval()
         self.encoder.train = lambda *args: None
         
-        if ckpt_path is not None:
-            self.init_from_ckpt(ckpt_path)
-        if denoise_path is not None:
-            self.init_denoise_from_ckpt(denoise_path)
-    
-    def init_denoise_from_ckpt(self, path):
-        self.encoder.load_state_dict(torch.load(
-                path), strict=False)    
+        for param in self.encoder.parameters():
+            param.requires_grad = False
         train_logger = logging.getLogger("train")
         train_logger.info("Loaded denoise model from {}".format(path))
         
@@ -69,11 +73,7 @@ class SCDDiffNet(pl.LightningModule):
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
             print(f"Unexpected Keys: {unexpected}")
-    
-    def on_train_start(self) -> None:
-        self.encoder.set_new_noise_schedule(self.beta_schedule, self.device)
 
-    
     # 这里写反向传播过程
     def training_step(self, batch):
         x1 = batch['image_A'].clone()
@@ -144,9 +144,7 @@ class SCDDiffNet(pl.LightningModule):
             # f'{domain}_change': change_mask.long(),
             }
     
-    def on_validation_start(self) -> None:
-        self.encoder.set_new_noise_schedule(self.beta_schedule, self.device)
-    # 这里写一个epoch后的验证过程
+   # 这里写一个epoch后的验证过程
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         x1 = batch['image_A']
@@ -184,8 +182,6 @@ class SCDDiffNet(pl.LightningModule):
         val_logger.info(message)
         self.running_meters.reset()
         
-    def on_test_start(self) -> None:
-        self.encoder.set_new_noise_schedule(self.beta_schedule, self.device)
     @torch.no_grad()
     def test_step(self, batch, batch_idx):
         x1, x2 = batch['image_A'], batch['image_B']
