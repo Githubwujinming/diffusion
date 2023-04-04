@@ -114,8 +114,9 @@ class SCDDiffNet(pl.LightningModule):
     
     # 这里配置优化器
     def configure_optimizers(self):
-        opt = torch.optim.Adam(list(self.decoder.parameters()),
-                                  lr=self.learning_rate)
+        opt = torch.optim.SGD(list(self.decoder.parameters()),
+                                  lr=self.learning_rate, weight_decay=1e-4, momentum=0.9)
+        
         if self.scheduler_config is not None:
             scheduler = instantiate_from_config(self.scheduler_config)
 
