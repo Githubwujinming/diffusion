@@ -62,7 +62,7 @@ class RCR(SCDNet):
         outputs_ul = [self.decoder(x_ul, perturbation=pertub, o_l = output_ul[-1].detach()) for pertub in self.pertubs]
         targets = torch.sigmoid(output_ul[-1]).detach()>0.5
         # Compute unsupervised loss
-        loss_unsup = sum([self.unsuper_loss(inputs=u[-1], targets=targets)
+        loss_unsup = sum([self.unsuper_loss(inputs=u[-1], targets=targets.float())
                         for u in outputs_ul])
         loss_unsup = (loss_unsup / len(outputs_ul))
         # Compute the unsupervised loss
