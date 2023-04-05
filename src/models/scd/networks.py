@@ -233,7 +233,7 @@ class SemiSCDNet(SCDNet):
                 scheduler_config=None, rc_config=None, **kwargs) -> None:
         super().__init__(in_channels=in_channels, monitor=monitor,
                          num_classes=num_classes, mid_dim=mid_dim,
-                         scheduler_config=scheduler_config)  
+                         scheduler_config=scheduler_config, **kwargs)  
         self.sup_running_metric = RunningMetrics(num_classes)
         self.unsup_running_metric = RunningMetrics(num_classes)
         self.unsuper_loss = softmax_mse_loss
