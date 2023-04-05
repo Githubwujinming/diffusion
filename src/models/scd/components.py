@@ -179,37 +179,154 @@ class SCDDecoder(nn.Module):
         return [F.interpolate(x1, self.x_size, mode='bilinear', align_corners=True), 
                 F.interpolate(x2, self.x_size, mode='bilinear', align_corners=True), 
                 F.interpolate(change, self.x_size, mode='bilinear', align_corners=True)]
-import clip
 
-class FrozenClipImageEmbedder(nn.Module):
-    """
-        Uses the CLIP image encoder.
-        """
-    def __init__(
-            self,
-            model,
-            jit=False,
-            device='cuda' if torch.cuda.is_available() else 'cpu',
-            antialias=False,
-        ):
-        super().__init__()
-        self.model, _ = clip.load(name=model, device=device, jit=jit)
 
-        self.antialias = antialias
+from src.modules.attention.model import AttentionBlock
 
-        self.register_buffer('mean', torch.Tensor([0.48145466, 0.4578275, 0.40821073]), persistent=False)
-        self.register_buffer('std', torch.Tensor([0.26862954, 0.26130258, 0.27577711]), persistent=False)
 
-    def preprocess(self, x):
-        # normalize to [0,1]
-        x = kornia.geometry.resize(x, (512, 512),
-                                   interpolation='bicubic',align_corners=True,
-                                   antialias=self.antialias)
-        x = (x + 1.) / 2.
-        # renormalize according to clip
-        x = kornia.enhance.normalize(x, self.mean, self.std)
+class SANeckAfter(Neck):
+    def __init__(self, embed_dim, num_res_blocks=2, mid_dim=128, ks=3, stride=3, uf=1, df=1) -> None:
+        super().__init__(embed_dim, mid_dim)
+        self.ks = (ks, ks)
+        self.stride = stride
+        self.uf = uf
+        self.df = df
+        self.attn = nn.Sequential(*[AttentionBlock(mid_dim*2, 8) for i in range(num_res_blocks)])
+        
+    def get_fold_unfold(self, x, kernel_size, stride, uf=1, df=1):  # todo load once not every time, shorten code
+            """
+            分成小块展开，
+            :param x: img of size (bs, c, h, w)
+            :return: n img crops of size (n, bs, c, kernel_size[0], kernel_size[1])
+            """
+            bs, nc, h, w = x.shape
+
+            if uf == 1 and df == 1:
+                fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
+                unfold = torch.nn.Unfold(**fold_params)
+
+                fold = torch.nn.Fold(output_size=x.shape[2:], **fold_params)
+
+            # 这是上采样
+            elif uf > 1 and df == 1:
+                fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
+                unfold = torch.nn.Unfold(**fold_params)
+
+                fold_params2 = dict(kernel_size=(kernel_size[0] * uf, kernel_size[0] * uf),
+                                    dilation=1, padding=0,
+                                    stride=(stride[0] * uf, stride[1] * uf))
+                fold = torch.nn.Fold(output_size=(x.shape[2] * uf, x.shape[3] * uf), **fold_params2)
+
+            # 下采样
+            elif df > 1 and uf == 1:
+                fold_params = dict(kernel_size=kernel_size, dilation=1, padding=0, stride=stride)
+                unfold = torch.nn.Unfold(**fold_params)
+
+                fold_params2 = dict(kernel_size=(kernel_size[0] // df, kernel_size[0] // df),
+                                    dilation=1, padding=0,
+                                    stride=(stride[0] // df, stride[1] // df))
+                fold = torch.nn.Fold(output_size=(x.shape[2] // df, x.shape[3] // df), **fold_params2)
+
+            else:
+                raise NotImplementedError
+
+            return fold, unfold
+
+
+    def patch_attn(self, x):
+        fold, unfold = self.get_fold_unfold(x, self.ks, self.stride, self.uf, self.df)
+        x = unfold(x) #
+        x = x.view((x.shape[0], -1, self.ks[0], self.ks[1], x.shape[-1]))
+        out_list = [self.attn(x[:, :, :, :, i]) for i in range(x.shape[-1])]
+        x = torch.stack(out_list, dim=-1)
+        x = x.view((x.shape[0], -1, x.shape[-1]))
+        x = fold(x)
         return x
+        
+    def forward(self, x1, x2):
+        x1 = self.head(x1)
+        x2 = self.head(x2)
+        x = [x1, x2]
+        x = torch.cat(x, 1)
+        x = self.patch_attn(x)
+        x1, x2 = torch.chunk(x, dim=1, chunks=2)
+        change = self.resCD(x)
+        
+        return x1, x2, change
+        
 
-    def forward(self, x):
-        # x is assumed to be in range [-1,1]
-        return self.model.encode_image(self.preprocess(x))
+class SANeckBefore(SANeckAfter):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__( *args, **kwargs)
+        num_res_blocks = kwargs['num_res_blocks'] if hasattr(kwargs, 'num_res_blocks') else 2
+        self.attn = nn.Sequential(*[AttentionBlock(1024, 32) for i in range(num_res_blocks)])
+    
+        
+        
+    
+    def forward(self, x1, x2):
+        x = torch.cat([x1, x2], 1)
+        x = self.patch_attn(x)
+        x1, x2 = torch.chunk(x, dim=1, chunks=2)
+        x1 = self.head(x1)
+        x2 = self.head(x2)
+        change = torch.cat([x1, x2], 1)
+        change = self.resCD(change)
+        return x1, x2, change
+ 
+class DecoderFromConfig(nn.Module):
+    def __init__(self, neck_config, head_config, x_size, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)   
+        self.neck = instantiate_from_config(neck_config)
+        self.head = instantiate_from_config(head_config)
+        self.x_size = x_size    
+       
+    def forward(self, x, perturbation = None, o_l = None):     
+        if perturbation is not None:
+            x = torch.cat(x, dim=1)
+            x = perturbation(x, o_l)
+            x1, x2 = torch.chunk(x, dim=1,chunks=2) 
+        else:
+            x1, x2 = x
+        x1, x2, change = self.neck(x1, x2)
+        x1, x2, change = self.head(x1, x2, change)
+        return [F.interpolate(x1, self.x_size, mode='bilinear', align_corners=True), 
+                F.interpolate(x2, self.x_size, mode='bilinear', align_corners=True), 
+                F.interpolate(change, self.x_size, mode='bilinear', align_corners=True)]
+
+     
+         
+    
+# from src.modules.attention.spatial_attention import SpatialTransformer
+# class CANeckAfter(SANeckAfter):
+#     def __init__(self, mid_dim=128, *args, **kwargs):
+#         super().__init__( *args, **kwargs)
+#         self.attn = SpatialTransformer(mid_dim*2, n_heads=8, d_head=16, depth=2)
+    
+#     def patch_attn(self, x):
+#         fold, unfold = self.get_fold_unfold(x, self.ks, self.stride, self.uf, self.df)
+#         x = unfold(x) #
+#         x = x.view((x.shape[0], -1, self.ks[0], self.ks[1], x.shape[-1]))
+#         out_list = [self.attn(x[:, :, :, :, i]) for i in range(x.shape[-1])]
+#         x = torch.stack(out_list, dim=-1)
+#         x = x.view((x.shape[0], -1, x.shape[-1]))
+#         x = fold(x)
+#         return x
+        
+#     def forward(self, x1, x2):
+#         x1 = self.head(x1)
+#         x2 = self.head(x2)
+#         x = [x1, x2]
+#         x = torch.cat(x, 1)
+#         change = self.resCD(x)
+#         x = self.patch_attn(x, change)
+#         x1, x2 = torch.chunk(x, dim=1, chunks=2)
+#         change = self.resCD(x)
+        
+#         return x1, x2, change   
+    
+# class CANeckBefore(SANeckBefore):
+#     def __init__(self, *args, **kwargs) -> None:
+#         super().__init__( *args, **kwargs)
+#         self.attn = SpatialTransformer(1024, n_heads=32, d_head=32, depth=2)
+        

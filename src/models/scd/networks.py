@@ -4,16 +4,18 @@ import logging
 from src.modules.ema import LitEma
 from utils.metrics import weighted_BCE_logits
 from .components import *
+from src.util import instantiate_from_config
 class SCDNet(pl.LightningModule):
     def __init__(self,in_channels=3, monitor=None,
-                num_classes=7, mid_dim=128,
+                num_classes=7, mid_dim=128, decoder_config=None,
                 scheduler_config=None, ckpt_path=None) -> None:
         super().__init__()  
         self.save_hyperparameters(ignore=['loss_func', 'running_meters', 'scheduler_config'])
         if monitor is not None:
             self.monitor = monitor 
         self.encoder = Encoder(in_channels)
-        self.decoder = SCDDecoder(embed_dim=512, num_classes=num_classes, mid_dim=mid_dim)
+        self.decoder = instantiate_from_config(decoder_config)
+        # self.decoder = SCDDecoder(embed_dim=512, num_classes=num_classes, mid_dim=mid_dim)
         self.loss_func = SCDLoss()
         self.train_running_meters = RunningMetrics(num_classes=num_classes)
         self.running_meters = RunningMetrics(num_classes=num_classes)
