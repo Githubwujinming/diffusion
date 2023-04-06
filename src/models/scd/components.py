@@ -112,11 +112,12 @@ class Encoder(nn.Module):
 
 
 class SCDHead(nn.Module):
-    def __init__(self, in_channel,num_classes=7) -> None:
+    def __init__(self, in_channel,num_classes=7, uf=1, df=1) -> None:
         super().__init__()
-        self.classifier1 = nn.Conv2d(in_channel, num_classes, kernel_size=1)
+        uf = uf*uf
+        self.classifier1 = nn.Sequential(nn.Conv2d(in_channel//uf, 64, kernel_size=1), nn.BatchNorm2d(64), nn.ReLU(), nn.Conv2d(64, num_classes, kernel_size=1))
         
-        self.classifier2 = nn.Conv2d(in_channel, num_classes, kernel_size=1)
+        self.classifier2 = nn.Sequential(nn.Conv2d(in_channel//uf, 64, kernel_size=1), nn.BatchNorm2d(64), nn.ReLU(), nn.Conv2d(64, num_classes, kernel_size=1))
         
         self.classifierCD = nn.Sequential(nn.Conv2d(in_channel, 64, kernel_size=1), nn.BatchNorm2d(64), nn.ReLU(), nn.Conv2d(64, 1, kernel_size=1))
     
@@ -127,11 +128,12 @@ class SCDHead(nn.Module):
         return x1, x2, change
 
 class Neck(nn.Module):
-    def __init__(self,embed_dim, mid_dim=128) -> None:
+    def __init__(self,embed_dim, mid_dim=128,  uf=1, df=1) -> None:
         super().__init__()
+        uf = uf*uf
         self.head = nn.Sequential(nn.Conv2d(embed_dim, mid_dim, kernel_size=1, stride=1, padding=0, bias=False),
                                   nn.BatchNorm2d(mid_dim), nn.ReLU())
-        self.resCD = self._make_layer(ResBlock, mid_dim*2, mid_dim, 3, stride=1)
+        self.resCD = self._make_layer(ResBlock, mid_dim*2 // uf, mid_dim, 3, stride=1)
         
         
     def _make_layer(self, block, inplanes, planes, blocks, stride=1):
@@ -186,9 +188,9 @@ from src.modules.attention.model import AttentionBlock
 
 class SANeckAfter(Neck):
     def __init__(self, embed_dim, num_res_blocks=2, mid_dim=128, ks=3, stride=3, uf=1, df=1) -> None:
-        super().__init__(embed_dim, mid_dim)
+        super().__init__(embed_dim, mid_dim, uf=uf, df=df)
         self.ks = (ks, ks)
-        self.stride = stride
+        self.stride = (stride, stride)
         self.uf = uf
         self.df = df
         self.attn = nn.Sequential(*[AttentionBlock(mid_dim*2, 8) for i in range(num_res_blocks)])
