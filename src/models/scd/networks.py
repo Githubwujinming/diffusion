@@ -173,7 +173,7 @@ class SCDNet(pl.LightningModule):
         preds['test_pred_A'] = Index2Color(preds['test_pred_A'].detach().cpu().numpy().squeeze())
         preds['test_pred_B'] = Index2Color(preds['test_pred_B'].detach().cpu().numpy().squeeze())
         # save images
-        save_dir = os.path.join(self.trainer.default_root_dir)
+        save_dir = os.path.join(self.trainer.log_dir)
         save_dir = os.path.join(save_dir, 'test_results')
         
         os.mkdir(save_dir) if not os.path.exists(save_dir) else None
