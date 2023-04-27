@@ -8,3 +8,8 @@ data/*
 *.png
 *.jpg
 *.sh
+*json
+*.log
+*.wandb
+*.patch
+*wandb*
